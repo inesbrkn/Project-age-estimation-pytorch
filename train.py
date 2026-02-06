@@ -39,6 +39,10 @@ def get_args():
     return args
 
 
+"""
+Sert à suivre la perte (loss) et la précision (accuracy) pendant l’entraînement et la validation.
+Permet de calculer la moyenne cumulée au fil des batches.
+"""
 class AverageMeter(object):
     def __init__(self):
         self.val = 0
@@ -53,6 +57,26 @@ class AverageMeter(object):
         self.avg = self.sum / self.count
 
 
+""" -- > Entraine le modèle
+
+1) Parcourt toutes les images du train_loader.
+
+2) Pour chaque batch :
+
+- Envoie les images et labels sur le GPU (x.to(device)).
+
+- Calcule la sortie du modèle (outputs = model(x)).
+
+- Calcule la loss (criterion(outputs, y)).
+
+- Calcule la précision du batch.
+
+- Fait la rétropropagation (loss.backward()) et met à jour les poids w et b en fonction de alpha et gradient calculé avec loss.backward(optimizer.step()).
+
+Affiche les statistiques en temps réel avec tqdm.
+
+Résultat : la loss et l’accuracy moyenne pour l’epoch.
+"""
 def train(train_loader, model, criterion, optimizer, epoch, device):
     model.train()
     loss_monitor = AverageMeter()
@@ -90,6 +114,7 @@ def train(train_loader, model, criterion, optimizer, epoch, device):
     return loss_monitor.avg, accuracy_monitor.avg
 
 
+# meme chose que train mais elle calcule MAE 
 def validate(validate_loader, model, criterion, epoch, device):
     model.eval()
     loss_monitor = AverageMeter()

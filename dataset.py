@@ -1,4 +1,5 @@
 import argparse
+# sert à lire des arguments depuis la ligne de commande
 import better_exceptions
 from pathlib import Path
 import numpy as np
@@ -8,7 +9,8 @@ import cv2
 from torch.utils.data import Dataset
 from imgaug import augmenters as iaa
 
-
+# Classe qui encapsule toute la logique d’augmentation d’images.
+# Pour chaque image on va appliquer une transformation au hasard pour que notre modèle n'apprenne pas par coeur les caractéristiques des images et qu'il puisse se généraliser.
 class ImgAugTransform:
     def __init__(self):
         self.aug = iaa.Sequential([
@@ -31,7 +33,8 @@ class ImgAugTransform:
         img = self.aug.augment_image(img)
         return img
 
-
+# Dataset PyTorch pour un problème de prédiction d’âge à partir d’un visage.
+# recup un dataset et le traite 
 class FaceDataset(Dataset):
     def __init__(self, data_dir, data_type, img_size=224, augment=False, age_stddev=1.0):
         assert(data_type in ("train", "valid", "test"))
@@ -41,6 +44,7 @@ class FaceDataset(Dataset):
         self.augment = augment
         self.age_stddev = age_stddev
 
+        # On commence par augmenter l'image si augment = true et sinon on applique juste la fonction identité,  
         if augment:
             self.transform = ImgAugTransform()
         else:
@@ -49,6 +53,7 @@ class FaceDataset(Dataset):
         self.x = []
         self.y = []
         self.std = []
+        # open file 
         df = pd.read_csv(str(csv_path))
         ignore_path = Path(__file__).resolve().parent.joinpath("ignore_list.csv")
         ignore_img_names = list(pd.read_csv(str(ignore_path))["img_name"].values)
@@ -56,13 +61,17 @@ class FaceDataset(Dataset):
         for _, row in df.iterrows():
             img_name = row["file_name"]
 
+            # s'il est dans le fichier qu'on veut ignorer on passe à l'image suivante
             if img_name in ignore_img_names:
                 continue
 
             img_path = img_dir.joinpath(img_name + "_face.jpg")
             assert(img_path.is_file())
+
+            # X c'est le dataset y la valeur de la prédiction
             self.x.append(str(img_path))
             self.y.append(row["apparent_age_avg"])
+            # std écart type à quel point on est loin de la vraie valeure
             self.std.append(row["apparent_age_std"])
 
     def __len__(self):
