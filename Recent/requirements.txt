@@ -1,0 +1,10 @@
+torch
+torchvision
+numpy
+pandas
+opencv-python
+tqdm
+tensorboard
+yacs
+better-exceptions
+pretrainedmodels
