@@ -16,7 +16,7 @@ import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 import pretrainedmodels
 import pretrainedmodels.utils
-from model import get_model
+from model import get_model2
 from dataset import FaceDataset
 from defaults import _C as cfg
 
@@ -77,6 +77,7 @@ Affiche les statistiques en temps réel avec tqdm.
 
 Résultat : la loss et l’accuracy moyenne pour l’epoch.
 """
+
 def train(train_loader, model, criterion, optimizer, epoch, device):
     model.train()
     loss_monitor = AverageMeter()
@@ -87,77 +88,145 @@ def train(train_loader, model, criterion, optimizer, epoch, device):
             x = x.to(device)
             y = y.to(device)
 
-            # compute output
             outputs = model(x)
 
-            # calc loss
-            loss = criterion(outputs, y)
+            # -------------------------
+            # RESIDUAL METHOD
+            # -------------------------
+            if cfg.MODEL.METHOD == "residual":
+                cls_logits, residual = outputs
+                loss = criterion(outputs, y)
+                predicted = cls_logits.argmax(1)
+
+            # -------------------------
+            # DEX / CLASSIFICATION
+            # -------------------------
+            else:
+                logits = outputs
+                loss = criterion(logits, y)
+                predicted = logits.argmax(1)
+
             cur_loss = loss.item()
 
-            # calc accuracy
-            _, predicted = outputs.max(1)
             correct_num = predicted.eq(y).sum().item()
-
-            # measure accuracy and record loss
             sample_num = x.size(0)
+
             loss_monitor.update(cur_loss, sample_num)
             accuracy_monitor.update(correct_num, sample_num)
 
-            # compute gradient and do SGD step
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
-            _tqdm.set_postfix(OrderedDict(stage="train", epoch=epoch, loss=loss_monitor.avg),
-                              acc=accuracy_monitor.avg, correct=correct_num, sample_num=sample_num)
+            _tqdm.set_postfix(
+                OrderedDict(stage="train", epoch=epoch, loss=loss_monitor.avg),
+                acc=accuracy_monitor.avg
+            )
 
     return loss_monitor.avg, accuracy_monitor.avg
 
 
-# meme chose que train mais elle calcule MAE 
-def validate(validate_loader, model, criterion, epoch, device):
+
+def validate(validate_loader, model, criterion, epoch, device, method="cls"):
     model.eval()
     loss_monitor = AverageMeter()
     accuracy_monitor = AverageMeter()
+
     preds = []
     gt = []
 
     with torch.no_grad():
         with tqdm(validate_loader) as _tqdm:
-            for i, (x, y) in enumerate(_tqdm):
+            for x, y in _tqdm:
                 x = x.to(device)
                 y = y.to(device)
 
-                # compute output
                 outputs = model(x)
-                preds.append(F.softmax(outputs, dim=-1).cpu().numpy())
+
+                # -------------------------
+                # RESIDUAL METHOD
+                # -------------------------
+                if method == "residual":
+                    cls_logits, residual = outputs
+                    predicted = cls_logits.argmax(1)
+                    final_age = predicted.float() + residual.squeeze(1)
+
+                    preds.append(final_age.cpu().numpy())
+
+                    # loss only if training/validation
+                    if criterion is not None:
+                        loss = criterion(outputs, y)
+                        correct_num = predicted.eq(y).sum().item()
+                        sample_num = x.size(0)
+
+                        loss_monitor.update(loss.item(), sample_num)
+                        accuracy_monitor.update(correct_num, sample_num)
+
+                       
+                        _tqdm.set_postfix(OrderedDict(stage="val", epoch=epoch, loss=loss_monitor.avg),
+                                      acc=accuracy_monitor.avg, correct=correct_num, sample_num=sample_num)
+                # -------------------------
+                # DEX METHOD
+                # -------------------------
+                else:
+                    logits = outputs
+                    predicted = logits.argmax(1)
+
+                    probs = F.softmax(logits, dim=-1)
+                    ages = torch.arange(0, 101).to(device)
+                    expected_age = (probs * ages).sum(dim=1)
+
+                    preds.append(expected_age.cpu().numpy())
+
+                    if criterion is not None:
+                        loss = criterion(logits, y)
+                        correct_num = predicted.eq(y).sum().item()
+                        sample_num = x.size(0)
+
+                        loss_monitor.update(loss.item(), sample_num)
+                        accuracy_monitor.update(correct_num, sample_num)
+
+                        _tqdm.set_postfix(loss=loss_monitor.avg,
+                                          acc=accuracy_monitor.avg)
+
+                # Toujours stocker le GT
                 gt.append(y.cpu().numpy())
 
-                # valid for validation, not used for test
-                if criterion is not None:
-                    # calc loss
-                    loss = criterion(outputs, y)
-                    cur_loss = loss.item()
+    preds = np.concatenate(preds)
+    gt = np.concatenate(gt)
 
-                    # calc accuracy
-                    _, predicted = outputs.max(1)
-                    correct_num = predicted.eq(y).sum().item()
-
-                    # measure accuracy and record loss
-                    sample_num = x.size(0)
-                    loss_monitor.update(cur_loss, sample_num)
-                    accuracy_monitor.update(correct_num, sample_num)
-                    _tqdm.set_postfix(OrderedDict(stage="val", epoch=epoch, loss=loss_monitor.avg),
-                                      acc=accuracy_monitor.avg, correct=correct_num, sample_num=sample_num)
-
-    preds = np.concatenate(preds, axis=0)
-    gt = np.concatenate(gt, axis=0)
-    ages = np.arange(0, 101)
-    ave_preds = (preds * ages).sum(axis=-1)
-    diff = ave_preds - gt
-    mae = np.abs(diff).mean()
+    mae = np.abs(preds - gt).mean()
 
     return loss_monitor.avg, accuracy_monitor.avg, mae
+
+
+class ResidualLoss(nn.Module):
+    def __init__(self, alpha=0.5):
+        super().__init__()
+        self.cls_loss = nn.CrossEntropyLoss()
+        self.res_loss = nn.MSELoss()
+        self.alpha = alpha
+
+    def forward(self, outputs, target):
+        """
+        outputs = (cls_logits, residual)
+        target = true age (LongTensor)
+        """
+
+        cls_logits, residual = outputs
+
+        # classification loss
+        loss_cls = self.cls_loss(cls_logits, target)
+
+        # predicted class
+        pred_class = cls_logits.argmax(dim=1)
+
+        # residual target
+        residual_target = target.float() - pred_class.float()
+
+        loss_res = self.res_loss(residual, residual_target)
+
+        return loss_cls + self.alpha * loss_res
 
 
 def main():
@@ -173,8 +242,9 @@ def main():
 
     # create model
     print("=> creating model '{}'".format(cfg.MODEL.ARCH))
-    model = get_model(model_name=cfg.MODEL.ARCH)
+    model = get_model2(model_name=cfg.MODEL.ARCH, method=cfg.MODEL.METHOD)
 
+    # choisi l'optimizer 
     if cfg.TRAIN.OPT == "sgd":
         optimizer = torch.optim.SGD(model.parameters(), lr=cfg.TRAIN.LR,
                                     momentum=cfg.TRAIN.MOMENTUM,
@@ -206,7 +276,14 @@ def main():
     if device == "cuda":
         cudnn.benchmark = True
 
-    criterion = nn.CrossEntropyLoss().to(device)
+    method = cfg.MODEL.METHOD  # "dex", "residual", ou None/""
+
+    # choix de la methode de calcule de la loss
+    if method == "residual":
+       criterion = ResidualLoss(alpha=0.5).to(device)
+    else:
+        criterion = nn.CrossEntropyLoss().to(device)  # comportement par défaut
+
     train_dataset = FaceDataset(args.data_dir, "train", img_size=cfg.MODEL.IMG_SIZE, augment=True,
                                 age_stddev=cfg.TRAIN.AGE_STDDEV)
     train_loader = DataLoader(train_dataset, batch_size=cfg.TRAIN.BATCH_SIZE, shuffle=True,
@@ -216,6 +293,7 @@ def main():
     val_loader = DataLoader(val_dataset, batch_size=cfg.TEST.BATCH_SIZE, shuffle=False,
                             num_workers=cfg.TRAIN.WORKERS, drop_last=False)
 
+    # Pour que le learning rate diminue pendant l'entrainement
     scheduler = StepLR(optimizer, step_size=cfg.TRAIN.LR_DECAY_STEP, gamma=cfg.TRAIN.LR_DECAY_RATE,
                        last_epoch=start_epoch - 1)
     best_val_mae = 10000.0

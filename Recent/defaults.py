@@ -4,9 +4,9 @@ _C = CN()
 
 # Model
 _C.MODEL = CN()
-_C.MODEL.ARCH = "se_resnext50_32x4d"
+_C.MODEL.ARCH = "se_resnext50_32x4d"  # check python train.py -h for available models
 _C.MODEL.IMG_SIZE = 224
-
+_C.MODEL.METHOD = "dex" # ou "res" pour dex method ou residual method
 # Train
 _C.TRAIN = CN()
 _C.TRAIN.OPT = "adam"  # adam or sgd
@@ -22,4 +22,5 @@ _C.TRAIN.AGE_STDDEV = 1.0
 
 # Test
 _C.TEST = CN()
+_C.TEST.WORKERS = 8
 _C.TEST.BATCH_SIZE = 128
