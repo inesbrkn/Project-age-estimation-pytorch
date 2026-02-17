@@ -1,9 +1,11 @@
+import numpy as np
+np.bool = bool
+
 import argparse
 import better_exceptions
 from pathlib import Path
 from collections import OrderedDict
 from tqdm import tqdm
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.parallel
