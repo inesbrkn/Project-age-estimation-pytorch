@@ -7,12 +7,12 @@ import pandas as pd
 import torch
 import cv2
 from torch.utils.data import Dataset
-from imgaug import augmenters as iaa
 
 # Classe qui encapsule toute la logique d’augmentation d’images.
 # Pour chaque image on va appliquer une transformation au hasard pour que notre modèle n'apprenne pas par coeur les caractéristiques des images et qu'il puisse se généraliser.
 class ImgAugTransform:
     def __init__(self):
+        from imgaug import augmenters as iaa
         self.aug = iaa.Sequential([
             iaa.OneOf([
                 iaa.Sometimes(0.25, iaa.AdditiveGaussianNoise(scale=0.1 * 255)),
