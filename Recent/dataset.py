@@ -16,7 +16,7 @@ class ImgAugTransform:
         self.aug = A.Compose([
             # équivalent OneOf([AdditiveGaussianNoise, GaussianBlur])
             A.OneOf([
-                A.GaussNoise(var_limit=(25, 65)),  # ~0.1*255 ± random
+                A.GaussNoise(std_range=(0.04, 0.2), mean_range=(0, 0), per_channel=True, p=0.25), # ~0.1*255 ± random
                 A.GaussianBlur(blur_limit=(0, 3))
             ], p=0.5),
             
