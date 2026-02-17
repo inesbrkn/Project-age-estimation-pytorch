@@ -13,6 +13,25 @@ import pretrainedmodels.utils
     - valeur de retour
         model (nn.Module): modèle prêt à l'entraînement.
 """
+# ---------------------------
+# Classe pour la Residual Method
+# ---------------------------
+class ResidualModel(nn.Module):
+    def __init__(self, base_model, dim_feats, num_classes=101):
+        super().__init__()
+        self.base = base_model
+        self.base.last_linear = nn.Linear(dim_feats, num_classes)  # classe principale
+        self.residual = nn.Linear(dim_feats, 1)  # résidu
+        self.base.avg_pool = nn.AdaptiveAvgPool2d(1)
+
+    def forward(self, x):
+        # Extraire les features
+        feats = self.base.features(x)
+        feats = self.base.avg_pool(feats).view(feats.size(0), -1)
+        cls_out = self.base.last_linear(feats)
+        res_out = self.residual(feats).squeeze(1)
+        return cls_out, res_out
+    
 
 def get_model(model_name="se_resnext50_32x4d", num_classes=101, pretrained="imagenet"):
     model = pretrainedmodels.__dict__[model_name](pretrained=pretrained)
@@ -26,6 +45,27 @@ def get_model(model_name="se_resnext50_32x4d", num_classes=101, pretrained="imag
     model.avg_pool = nn.AdaptiveAvgPool2d(1)
     return model
 
+def get_model2(model_name="se_resnext50_32x4d", method=None, num_classes=101, pretrained="imagenet"):
+    """
+    Retourne un modèle adapté à la méthode choisie :
+      - method="dex" : DEX (softmax sur 101 classes)
+      - method="residual" : Residual Method
+      - method=None ou "" : modèle classique (dernier layer linéaire = num_classes)
+    """
+    base_model = pretrainedmodels.__dict__[model_name](pretrained=pretrained)
+    dim_feats = base_model.last_linear.in_features
+    base_model.avg_pool = nn.AdaptiveAvgPool2d(1)
+
+    if method == "dex":
+        base_model.last_linear = nn.Linear(dim_feats, num_classes)
+        return base_model
+
+    elif method == "residual":
+        return ResidualModel(base_model, dim_feats, num_classes)
+
+    else:  # comportement par défaut
+        base_model.last_linear = nn.Linear(dim_feats, num_classes)
+        return base_model
 """ 
 Le pooling c'est quoi ? une couche intermédiaire du réseau de neurone. 
 Son but : réduire la taille des images/features tout en conservant les informations importantes.
@@ -44,7 +84,7 @@ la zone est résumé par cette valeur là
 """
 
 def main():
-    model = get_model()
+    model = get_model2()
     print(model)
 
 
