@@ -8,44 +8,38 @@ from torch.utils.data import Dataset
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
 
-
 # =========================================================
-# Augmentation moderne avec albumentations
+# Classe d'augmentation équivalente à imgaug
 # =========================================================
 class ImgAugTransform:
-    def __init__(self, img_size):
+    def __init__(self):
         self.aug = A.Compose([
+            # équivalent OneOf([AdditiveGaussianNoise, GaussianBlur])
             A.OneOf([
-                A.GaussNoise(var_limit=(10.0, 50.0), p=0.25),
-                A.GaussianBlur(blur_limit=(3, 7), p=0.25),
+                A.GaussNoise(var_limit=(25, 65)),  # ~0.1*255 ± random
+                A.GaussianBlur(blur_limit=(0, 3))
             ], p=0.5),
-
+            
+            # affine similaire à iaa.Affine
             A.Affine(
                 rotate=(-20, 20),
                 scale=(0.95, 1.05),
                 translate_percent=(-0.05, 0.05),
-                mode=cv2.BORDER_REPLICATE,
-                p=1.0
+                border_mode=cv2.BORDER_REPLICATE
             ),
-
+            
+            # Hue & Saturation comme iaa.AddToHueAndSaturation
             A.HueSaturationValue(
                 hue_shift_limit=10,
                 sat_shift_limit=10,
-                val_shift_limit=0,
-                p=1.0
+                val_shift_limit=0
             ),
-
-            A.RandomGamma(gamma_limit=(80, 120), p=1.0),
-
-            A.HorizontalFlip(p=0.5),
-
-            # Normalisation ImageNet (important si backbone pré-entraîné)
-            A.Normalize(
-                mean=(0.485, 0.456, 0.406),
-                std=(0.229, 0.224, 0.225)
-            ),
-
-            ToTensorV2()
+            
+            # Gamma contrast équivalent
+            A.RandomGamma(gamma_limit=(30, 200)),
+            
+            # Flip horizontal
+            A.HorizontalFlip(p=0.5)
         ])
 
     def __call__(self, img):
@@ -58,7 +52,6 @@ class ImgAugTransform:
 class FaceDataset(Dataset):
     def __init__(self, data_dir, data_type, img_size=224, augment=False, age_stddev=1.0):
         assert data_type in ("train", "valid", "test")
-
         csv_path = Path(data_dir) / f"gt_avg_{data_type}.csv"
         img_dir = Path(data_dir) / data_type
 
@@ -67,15 +60,10 @@ class FaceDataset(Dataset):
         self.age_stddev = age_stddev
 
         if augment:
-            self.transform = ImgAugTransform(img_size)
+            self.transform = ImgAugTransform()
         else:
-            self.transform = A.Compose([
-                A.Normalize(
-                    mean=(0.485, 0.456, 0.406),
-                    std=(0.229, 0.224, 0.225)
-                ),
-                ToTensorV2()
-            ])
+            # Si pas d'augmentation, juste identité
+            self.transform = lambda img: img
 
         self.x = []
         self.y = []
@@ -95,7 +83,6 @@ class FaceDataset(Dataset):
                 continue
 
             img_path = img_dir / f"{img_name}_face.jpg"
-
             if not img_path.is_file():
                 continue
 
@@ -110,38 +97,31 @@ class FaceDataset(Dataset):
         img_path = self.x[idx]
         age = self.y[idx]
 
+        # ajout de bruit sur l'âge si augmentation
         if self.augment:
             age += np.random.randn() * self.std[idx] * self.age_stddev
 
-        img = cv2.imread(img_path)
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        img = cv2.imread(img_path, 1)
         img = cv2.resize(img, (self.img_size, self.img_size))
+        img = self.transform(img).astype(np.float32)
 
-        img = self.transform(img)
+        # conversion HWC → CHW pour PyTorch
+        img = np.transpose(img, (2, 0, 1))
 
-        age = np.clip(round(age), 0, 100)
-
-        return img, torch.tensor(age, dtype=torch.float32)
+        return torch.from_numpy(img), np.clip(round(age), 0, 100)
 
 
 # =========================================================
 # Test rapide
 # =========================================================
 def main():
-    parser = argparse.ArgumentParser(
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter
-    )
+    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("--data_dir", type=str, required=True)
     args = parser.parse_args()
 
-    dataset = FaceDataset(args.data_dir, "train")
-    print(f"train dataset len: {len(dataset)}")
-
-    dataset = FaceDataset(args.data_dir, "valid")
-    print(f"valid dataset len: {len(dataset)}")
-
-    dataset = FaceDataset(args.data_dir, "test")
-    print(f"test dataset len: {len(dataset)}")
+    for dt in ["train", "valid", "test"]:
+        dataset = FaceDataset(args.data_dir, dt)
+        print(f"{dt} dataset len: {len(dataset)}")
 
 
 if __name__ == '__main__':
