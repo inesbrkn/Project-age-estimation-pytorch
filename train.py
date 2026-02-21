@@ -1,9 +1,11 @@
+import numpy as np
+np.bool = bool
+
 import argparse
 import better_exceptions
 from pathlib import Path
 from collections import OrderedDict
 from tqdm import tqdm
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.parallel
@@ -19,7 +21,6 @@ import pretrainedmodels.utils
 from model import get_model
 from dataset import FaceDataset
 from defaults import _C as cfg
-
 
 def get_args():
     model_names = sorted(name for name in pretrainedmodels.__dict__
