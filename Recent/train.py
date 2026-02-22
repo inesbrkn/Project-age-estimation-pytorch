@@ -309,7 +309,7 @@ def main():
         train_loss, train_acc = train(train_loader, model, criterion, optimizer, epoch, device)
 
         # validate
-        val_loss, val_acc, val_mae = validate(val_loader, model, criterion, epoch, device)
+        val_loss, val_acc, val_mae = validate(val_loader, model, criterion, epoch, device, method=cfg.MODEL.METHOD)
 
         if args.tensorboard is not None:
             train_writer.add_scalar("loss", train_loss, epoch)

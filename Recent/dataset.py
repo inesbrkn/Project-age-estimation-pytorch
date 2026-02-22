@@ -8,6 +8,10 @@ from torch.utils.data import Dataset
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
 
+# Normalisation ImageNet (RGB) pour les modèles pré-entraînés
+IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32).reshape(1, 1, 3)
+IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32).reshape(1, 1, 3)
+
 # =========================================================
 # Classe d'augmentation équivalente à imgaug
 # =========================================================
@@ -102,8 +106,12 @@ class FaceDataset(Dataset):
             age += np.random.randn() * self.std[idx] * self.age_stddev
 
         img = cv2.imread(img_path, 1)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         img = cv2.resize(img, (self.img_size, self.img_size))
         img = self.transform(img).astype(np.float32)
+
+        # Normalisation ImageNet (pixels 0–255 → 0–1 puis mean/std)
+        img = (img / 255.0 - IMAGENET_MEAN) / IMAGENET_STD
 
         # conversion HWC → CHW pour PyTorch
         img = np.transpose(img, (2, 0, 1))

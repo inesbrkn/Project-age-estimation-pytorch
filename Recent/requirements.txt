@@ -8,4 +8,4 @@ tensorboard
 yacs
 better-exceptions
 pretrainedmodels
-albumentationsx
+albumentations

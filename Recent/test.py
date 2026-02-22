@@ -65,7 +65,7 @@ def main():
                              num_workers=cfg.TRAIN.WORKERS, drop_last=False)
 
     print("=> start testing")
-    _, _, test_mae = validate(test_loader, model, None, 0, device)
+    _, _, test_mae = validate(test_loader, model, None, 0, device, method=cfg.MODEL.METHOD)
     print(f"test mae: {test_mae:.3f}")
 
 
