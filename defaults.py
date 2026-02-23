@@ -8,7 +8,7 @@ _C.MODEL = CN()
 _C.MODEL.ARCH = "se_resnext50_32x4d"
 _C.MODEL.IMG_SIZE = 224
 _C.MODEL.METHOD = "dex"  # "dex" ou "residual" pour comparer les deux (même config recommandée)
-_C.MODEL.LABEL_SMOOTHING = 0.0  # 0.1 souvent bénéfique pour la généralisation (classification)
+_C.MODEL.LABEL_SMOOTHING = 0.1  # 0.1 souvent bénéfique pour la généralisation (classification)
 # Train
 _C.TRAIN = CN()
 _C.TRAIN.SEED = 42  # seed fixe pour runs reproductibles (comparaison DEX vs Residual équitable)
@@ -19,7 +19,7 @@ _C.TRAIN.LR_DECAY_STEP = 20
 _C.TRAIN.LR_DECAY_RATE = 0.2
 _C.TRAIN.MOMENTUM = 0.9
 _C.TRAIN.WEIGHT_DECAY = 0.0
-_C.TRAIN.BATCH_SIZE = 32
+_C.TRAIN.BATCH_SIZE = 60
 _C.TRAIN.EPOCHS = 80
 _C.TRAIN.AGE_STDDEV = 1.0
 
