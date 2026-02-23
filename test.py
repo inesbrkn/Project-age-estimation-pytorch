@@ -53,7 +53,7 @@ def main():
 
     if Path(resume_path).is_file():
         print("=> loading checkpoint '{}'".format(resume_path))
-        checkpoint = torch.load(resume_path, map_location="cpu")
+        checkpoint = torch.load(resume_path, map_location="cpu", weights_only=False)
         _load_state_dict_into_model(model, checkpoint['state_dict'])
         print("=> loaded checkpoint '{}'".format(resume_path))
     else:
