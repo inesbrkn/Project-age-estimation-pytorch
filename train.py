@@ -137,7 +137,7 @@ def compute_predictions(outputs, mode, device):
         return cls_logits.argmax(1).float() + residual.squeeze(1)
     elif mode in ["gaussian", "laplace"]:
         mu, _ = outputs
-        return mu.squeeze(1).clamp(0, 100)
+        return mu.clamp(0, 100)
     else:
         raise ValueError(f"Unknown mode: {mode}")
 
@@ -181,22 +181,6 @@ class LaplaceLikelihoodLoss(nn.Module):
         mu, log_b = outputs
         b = torch.exp(log_b)
         return ((target - mu).abs() / b + log_b).mean()
-
-class RegressionHead(nn.Module):
-    def __init__(self, in_features, mode):
-        super().__init__()
-        self.fc = nn.Linear(in_features, 2)  # mu + log_var/log_b
-        self.mode = mode
-
-    def forward(self, x):
-        out = self.fc(x)
-        mu, scale_param = out[:, 0], out[:, 1]
-        if self.mode == "gaussian":
-            return mu, scale_param # log_var
-        elif self.mode == "laplace":
-            return mu, scale_param  # log_b
-        else:
-            raise ValueError(f"Unknown regression mode: {self.mode}")
 
 def main():
     args = get_args()
