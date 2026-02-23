@@ -9,10 +9,12 @@ import torch.utils.data
 from torch.utils.data import DataLoader
 import pretrainedmodels
 import pretrainedmodels.utils
-from model import get_model
+from model import get_model2
 from dataset import FaceDataset
 from defaults import _C as cfg
 from train import validate
+
+
 
 
 def get_args():
@@ -40,7 +42,7 @@ def main():
 
     # create model
     print("=> creating model '{}'".format(cfg.MODEL.ARCH))
-    model = get_model(model_name=cfg.MODEL.ARCH, pretrained=None)
+    model = get_model2(model_name=cfg.MODEL.ARCH,method=cfg.MODEL.METHOD, pretrained=None)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = model.to(device)
 
