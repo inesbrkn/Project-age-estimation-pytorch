@@ -12,7 +12,7 @@ import pretrainedmodels.utils
 from model import get_model2
 from dataset import FaceDataset
 from defaults import _C as cfg
-from train import validate
+from train import validate, _load_state_dict_into_model
 
 
 
@@ -46,13 +46,15 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = model.to(device)
 
-    # load checkpoint
+    # Chargement du checkpoint : on utilise _load_state_dict_into_model pour accepter un .pth
+    # sauvegardé avec DataParallel (clés "module.*"). En test on est généralement en mono-GPU,
+    # donc sans ce traitement load_state_dict échouerait ou ignorerait des paramètres.
     resume_path = args.resume
 
     if Path(resume_path).is_file():
         print("=> loading checkpoint '{}'".format(resume_path))
         checkpoint = torch.load(resume_path, map_location="cpu")
-        model.load_state_dict(checkpoint['state_dict'])
+        _load_state_dict_into_model(model, checkpoint['state_dict'])
         print("=> loaded checkpoint '{}'".format(resume_path))
     else:
         raise ValueError("=> no checkpoint found at '{}'".format(resume_path))

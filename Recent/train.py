@@ -21,6 +21,23 @@ from dataset import FaceDataset
 from defaults import _C as cfg
 
 
+def _load_state_dict_into_model(model, state_dict):
+    """
+    Charge le state_dict dans le modèle en gérant le préfixe DataParallel.
+
+    Pourquoi c'est nécessaire :
+    - Avec nn.DataParallel(model), PyTorch enregistre les paramètres sous des clés "module.conv1", etc.
+    - En mono-GPU (ex. Colab) le modèle n'a pas ce préfixe, donc load_state_dict() échoue ou ignore des clés.
+    - Cette fonction détecte les clés "module.*" et les renomme en retirant "module." (7 caractères),
+      pour qu'un même fichier .pth fonctionne après entraînement multi-GPU comme en évaluation mono-GPU.
+    """
+    if not any(k.startswith("module.") for k in state_dict.keys()):
+        model.load_state_dict(state_dict)
+        return
+    new_state_dict = OrderedDict((k[7:] if k.startswith("module.") else k, v) for k, v in state_dict.items())
+    model.load_state_dict(new_state_dict)
+
+
 def get_args():
     model_names = sorted(name for name in pretrainedmodels.__dict__
                          if not name.startswith("__")
@@ -255,20 +272,32 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = model.to(device)
 
-    # optionally resume from a checkpoint
+    # ----- Reprise depuis un checkpoint (--resume) -----
+    # On charge AVANT d'envelopper le modèle avec DataParallel, pour pouvoir utiliser
+    # _load_state_dict_into_model et accepter un checkpoint sauvegardé avec ou sans DataParallel.
     resume_path = args.resume
+    checkpoint = None  # gardé pour recharger le scheduler plus bas
 
     if resume_path:
         if Path(resume_path).is_file():
             print("=> loading checkpoint '{}'".format(resume_path))
             checkpoint = torch.load(resume_path, map_location="cpu")
-            start_epoch = checkpoint['epoch']
-            model.load_state_dict(checkpoint['state_dict'])
+            start_epoch = checkpoint['epoch']  # prochain epoch à exécuter
+            _load_state_dict_into_model(model, checkpoint['state_dict'])  # gère le préfixe "module." si besoin
             print("=> loaded checkpoint '{}' (epoch {})"
                   .format(resume_path, checkpoint['epoch']))
-            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            if 'optimizer_state_dict' in checkpoint:
+                optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            # Restaurer best_val_mae évite d'écraser best.pth avec un modèle moins bon après reprise
+            if 'best_val_mae' in checkpoint:
+                best_val_mae = checkpoint['best_val_mae']
+            else:
+                best_val_mae = 10000.0
         else:
             print("=> no checkpoint found at '{}'".format(resume_path))
+            best_val_mae = 10000.0
+    else:
+        best_val_mae = 10000.0
 
     if args.multi_gpu:
         model = nn.DataParallel(model)
@@ -293,10 +322,14 @@ def main():
     val_loader = DataLoader(val_dataset, batch_size=cfg.TEST.BATCH_SIZE, shuffle=False,
                             num_workers=cfg.TRAIN.WORKERS, drop_last=False)
 
-    # Pour que le learning rate diminue pendant l'entrainement
+    # Scheduler : last_epoch = start_epoch - 1 pour que le learning rate soit correct au prochain step.
     scheduler = StepLR(optimizer, step_size=cfg.TRAIN.LR_DECAY_STEP, gamma=cfg.TRAIN.LR_DECAY_RATE,
                        last_epoch=start_epoch - 1)
-    best_val_mae = 10000.0
+    # À la reprise, restaurer l'état du scheduler évite que le LR reparte de zéro (ex. reprendre à l'epoch 30
+    # avec le LR de l'epoch 0). Sans ça, la courbe de LR serait incorrecte après --resume.
+    if checkpoint is not None and 'scheduler_state_dict' in checkpoint:
+        scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        print("=> loaded scheduler state from checkpoint")
     train_writer = None
 
     if args.tensorboard is not None:
@@ -318,25 +351,47 @@ def main():
             val_writer.add_scalar("acc", val_acc, epoch)
             val_writer.add_scalar("mae", val_mae, epoch)
 
-        # checkpoint
+        # On fait scheduler.step() avant de sauvegarder pour que le state_dict du scheduler
+        # reflète bien "epoch terminé" ; à la reprise, le LR sera cohérent.
+        scheduler.step()
+
+        # ----- Checkpoint "best" : un seul fichier best.pth (on écrase l'ancien) -----
+        # Évite de remplir le disque (surtout sur Colab). On ne garde que le meilleur modèle selon val MAE.
         if val_mae < best_val_mae:
             print(f"=> [epoch {epoch:03d}] best val mae was improved from {best_val_mae:.3f} to {val_mae:.3f}")
+            best_val_mae = val_mae
             model_state_dict = model.module.state_dict() if args.multi_gpu else model.state_dict()
             torch.save(
                 {
                     'epoch': epoch + 1,
                     'arch': cfg.MODEL.ARCH,
                     'state_dict': model_state_dict,
-                    'optimizer_state_dict': optimizer.state_dict()
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'scheduler_state_dict': scheduler.state_dict(),
+                    'best_val_mae': best_val_mae,
                 },
-                str(checkpoint_dir.joinpath("epoch{:03d}_{:.5f}_{:.4f}.pth".format(epoch, val_loss, val_mae)))
+                str(checkpoint_dir / "best.pth")
             )
-            best_val_mae = val_mae
-        else:
-            print(f"=> [epoch {epoch:03d}] best val mae was not improved from {best_val_mae:.3f} ({val_mae:.3f})")
 
-        # adjust learning rate
-        scheduler.step()
+        # ----- Checkpoint "last" : à chaque fin d'epoch -----
+        # Permet de reprendre avec --resume au bon epoch (modèle + optimizer + scheduler + best_val_mae).
+        # Indispensable après une déconnexion Colab : on relance avec --resume checkpoint/last.pth
+        # (en pointant le dossier sur Drive) et l'entraînement continue au lieu de repartir de zéro.
+        model_state_dict = model.module.state_dict() if args.multi_gpu else model.state_dict()
+        torch.save(
+            {
+                'epoch': epoch + 1,
+                'arch': cfg.MODEL.ARCH,
+                'state_dict': model_state_dict,
+                'optimizer_state_dict': optimizer.state_dict(),
+                'scheduler_state_dict': scheduler.state_dict(),
+                'best_val_mae': best_val_mae,
+            },
+            str(checkpoint_dir / "last.pth")
+        )
+
+        if val_mae >= best_val_mae:
+            print(f"=> [epoch {epoch:03d}] best val mae was not improved from {best_val_mae:.3f} ({val_mae:.3f})")
 
     print("=> training finished")
     print(f"additional opts: {args.opts}")
