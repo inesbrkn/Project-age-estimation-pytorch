@@ -7,13 +7,13 @@ _C.MODEL = CN()
 # Backbone : python train.py -h liste les noms. Ex. se_resnext50_32x4d, resnet18, resnet50, etc.
 _C.MODEL.ARCH = "se_resnext50_32x4d"
 _C.MODEL.IMG_SIZE = 224
-_C.MODEL.METHOD = "dex"  # "dex" ou "residual" pour comparer les deux (même config recommandée)
+_C.MODEL.METHOD = "residual"  # "dex" ou "residual" pour comparer les deux (même config recommandée)
 _C.MODEL.LABEL_SMOOTHING = 0.1  # 0.1 souvent bénéfique pour la généralisation (classification)
 # Train
 _C.TRAIN = CN()
 _C.TRAIN.SEED = 42  # seed fixe pour runs reproductibles (comparaison DEX vs Residual équitable)
 _C.TRAIN.OPT = "adam"  # adam or sgd
-_C.TRAIN.WORKERS = 2
+_C.TRAIN.WORKERS = 4
 _C.TRAIN.LR = 0.001
 _C.TRAIN.LR_DECAY_STEP = 20
 _C.TRAIN.LR_DECAY_RATE = 0.2
