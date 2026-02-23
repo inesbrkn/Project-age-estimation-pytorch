@@ -21,6 +21,17 @@ from dataset import FaceDataset
 from defaults import _C as cfg
 
 
+def set_seed(seed):
+    """Fixe les seeds pour des runs reproductibles (comparaison DEX vs Residual équitable)."""
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    # On laisse cudnn.benchmark à True (défini plus bas en main) pour la vitesse ; pour une reproductibilité
+    # stricte sur GPU, mettre cudnn.benchmark = False après cet appel.
+
+
 def _load_state_dict_into_model(model, state_dict):
     """
     Charge le state_dict dans le modèle en gérant le préfixe DataParallel.
@@ -214,13 +225,37 @@ def validate(validate_loader, model, criterion, epoch, device, method="cls"):
 
     mae = np.abs(preds - gt).mean()
 
-    return loss_monitor.avg, accuracy_monitor.avg, mae
+    return loss_monitor.avg, accuracy_monitor.avg, mae, preds, gt
+
+
+def mae_by_age_group(preds, gt, groups=None):
+    """
+    Calcule le MAE par tranche d'âge (ex. enfants 0-17, adultes 18-45, seniors 46+).
+    groups: liste de (min_age, max_age) inclus. Par défaut cfg.TEST.AGE_GROUPS.
+    Retourne une liste de dict avec 'name', 'mae', 'count', 'std' (écart-type des erreurs absolues).
+    """
+    if groups is None:
+        groups = cfg.TEST.AGE_GROUPS
+    preds = np.asarray(preds)
+    gt = np.asarray(gt)
+    errors = np.abs(preds - gt)
+    results = []
+    for low, high in groups:
+        mask = (gt >= low) & (gt <= high)
+        n = mask.sum()
+        if n == 0:
+            results.append({"name": f"{low}-{high}", "mae": np.nan, "count": 0, "std": np.nan})
+            continue
+        mae = errors[mask].mean()
+        std = errors[mask].std()
+        results.append({"name": f"{low}-{high}", "mae": float(mae), "count": int(n), "std": float(std)})
+    return results
 
 
 class ResidualLoss(nn.Module):
-    def __init__(self, alpha=0.5):
+    def __init__(self, alpha=0.5, label_smoothing=0.0):
         super().__init__()
-        self.cls_loss = nn.CrossEntropyLoss()
+        self.cls_loss = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
         self.res_loss = nn.MSELoss()
         self.alpha = alpha
 
@@ -253,6 +288,7 @@ def main():
         cfg.merge_from_list(args.opts)
 
     cfg.freeze()
+    set_seed(cfg.TRAIN.SEED)
     start_epoch = 0
     checkpoint_dir = Path(args.checkpoint)
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -307,11 +343,11 @@ def main():
 
     method = cfg.MODEL.METHOD  # "dex", "residual", ou None/""
 
-    # choix de la methode de calcule de la loss
+    # choix de la methode de calcule de la loss (label_smoothing améliore souvent la généralisation)
     if method == "residual":
-       criterion = ResidualLoss(alpha=0.5).to(device)
+        criterion = ResidualLoss(alpha=0.5, label_smoothing=cfg.MODEL.LABEL_SMOOTHING).to(device)
     else:
-        criterion = nn.CrossEntropyLoss().to(device)  # comportement par défaut
+        criterion = nn.CrossEntropyLoss(label_smoothing=cfg.MODEL.LABEL_SMOOTHING).to(device)
 
     train_dataset = FaceDataset(args.data_dir, "train", img_size=cfg.MODEL.IMG_SIZE, augment=True,
                                 age_stddev=cfg.TRAIN.AGE_STDDEV)
@@ -342,7 +378,7 @@ def main():
         train_loss, train_acc = train(train_loader, model, criterion, optimizer, epoch, device)
 
         # validate
-        val_loss, val_acc, val_mae = validate(val_loader, model, criterion, epoch, device, method=cfg.MODEL.METHOD)
+        val_loss, val_acc, val_mae, _, _ = validate(val_loader, model, criterion, epoch, device, method=cfg.MODEL.METHOD)
 
         if args.tensorboard is not None:
             train_writer.add_scalar("loss", train_loss, epoch)
