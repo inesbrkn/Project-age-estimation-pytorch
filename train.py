@@ -335,7 +335,7 @@ def main():
 
     # create model
     print("=> creating model '{}'".format(cfg.MODEL.ARCH))
-    model = get_model2(model_name=cfg.MODEL.ARCH, mode=cfg.MODEL.METHOD)
+    model = get_model2(model_name=cfg.MODEL.ARCH, method=cfg.MODEL.METHOD)
 
     # choisi l'optimizer 
     if cfg.TRAIN.OPT == "sgd":
