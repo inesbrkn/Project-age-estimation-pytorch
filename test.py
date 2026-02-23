@@ -9,10 +9,12 @@ import torch.utils.data
 from torch.utils.data import DataLoader
 import pretrainedmodels
 import pretrainedmodels.utils
-from model import get_model
+from model import get_model2
 from dataset import FaceDataset
 from defaults import _C as cfg
-from train import validate
+from train import validate, _load_state_dict_into_model, mae_by_age_group
+
+
 
 
 def get_args():
@@ -40,17 +42,19 @@ def main():
 
     # create model
     print("=> creating model '{}'".format(cfg.MODEL.ARCH))
-    model = get_model(model_name=cfg.MODEL.ARCH, pretrained=None)
+    model = get_model2(model_name=cfg.MODEL.ARCH,method=cfg.MODEL.METHOD, pretrained=None)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = model.to(device)
 
-    # load checkpoint
+    # Chargement du checkpoint : on utilise _load_state_dict_into_model pour accepter un .pth
+    # sauvegardé avec DataParallel (clés "module.*"). En test on est généralement en mono-GPU,
+    # donc sans ce traitement load_state_dict échouerait ou ignorerait des paramètres.
     resume_path = args.resume
 
     if Path(resume_path).is_file():
         print("=> loading checkpoint '{}'".format(resume_path))
         checkpoint = torch.load(resume_path, map_location="cpu")
-        model.load_state_dict(checkpoint['state_dict'])
+        _load_state_dict_into_model(model, checkpoint['state_dict'])
         print("=> loaded checkpoint '{}'".format(resume_path))
     else:
         raise ValueError("=> no checkpoint found at '{}'".format(resume_path))
@@ -63,8 +67,14 @@ def main():
                              num_workers=cfg.TRAIN.WORKERS, drop_last=False)
 
     print("=> start testing")
-    _, _, test_mae = validate(test_loader, model, None, 0, device)
-    print(f"test mae: {test_mae:.3f}")
+    _, _, test_mae, preds, gt = validate(test_loader, model, None, 0, device, method=cfg.MODEL.METHOD)
+    print(f"test mae (global): {test_mae:.3f}")
+
+    # MAE par tranche d'âge (enfants / adultes / seniors) pour analyse des erreurs
+    group_results = mae_by_age_group(preds, gt)
+    print("=> MAE by age group:")
+    for r in group_results:
+        print(f"  {r['name']} yrs: mae={r['mae']:.3f}, n={r['count']}, std(err)={r['std']:.3f}")
 
 
 if __name__ == '__main__':
