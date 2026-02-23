@@ -109,9 +109,9 @@ def run_epoch(loader, model, criterion, optimizer, epoch, device, mode, is_train
             loss = criterion(outputs, y)
             preds = compute_predictions(outputs, mode, device)
 
-            mae = (preds - y.float()).abs().mean().item()
             loss_meter.update(loss.item(), x.size(0))
-            mae_meter.update(mae, x.size(0))
+            abs_error = (preds - y.float()).abs()
+            mae_meter.update(abs_error.sum().item(), x.size(0))
 
             if is_train:
                 optimizer.zero_grad()
