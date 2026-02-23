@@ -33,6 +33,35 @@ class ResidualModel(nn.Module):
         return cls_out, res_out
     
 
+class RegressionHead(nn.Module):
+    def __init__(self, in_features, mode):
+        super().__init__()
+        self.fc = nn.Linear(in_features, 2)  # mu + log_var/log_b
+        self.mode = mode
+
+    def forward(self, x):
+        out = self.fc(x)
+        mu, scale_param = out[:, 0], out[:, 1]
+        if self.mode == "gaussian":
+            return mu, scale_param # log_var
+        elif self.mode == "laplace":
+            return mu, scale_param  # log_b
+        else:
+            raise ValueError(f"Unknown regression mode: {self.mode}")
+
+class RegressionModel(nn.Module):
+    def __init__(self, base_model, dim_feats, mode):
+        super().__init__()
+        self.base = base_model
+        self.base.last_linear = nn.Identity()  # on neutralise le dernier layer
+        self.head = RegressionHead(dim_feats, mode=mode)
+
+    def forward(self, x):
+        feats = self.base.features(x)
+        feats = self.base.avg_pool(feats).view(feats.size(0), -1)
+        return self.head(feats)
+
+"""
 def get_model(model_name="se_resnext50_32x4d", num_classes=101, pretrained="imagenet"):
     model = pretrainedmodels.__dict__[model_name](pretrained=pretrained)
     # Récupérer la dimension d'entrée de la dernière couche linéaire
@@ -44,6 +73,7 @@ def get_model(model_name="se_resnext50_32x4d", num_classes=101, pretrained="imag
     # Cela permet de gérer des images d'entrée de tailles différentes
     model.avg_pool = nn.AdaptiveAvgPool2d(1)
     return model
+"""
 
 def get_model2(model_name="se_resnext50_32x4d", method=None, num_classes=101, pretrained="imagenet"):
     """
@@ -64,8 +94,7 @@ def get_model2(model_name="se_resnext50_32x4d", method=None, num_classes=101, pr
         return ResidualModel(base_model, dim_feats, num_classes)
 
     elif method in ["gaussian", "laplace"]:
-        base_model.last_linear = RegressionHead(dim_feats, mode=method)
-        return base_model
+        return RegressionModel(base_model, dim_feats, mode=method)
 
     else:
         base_model.last_linear = nn.Linear(dim_feats, num_classes)
