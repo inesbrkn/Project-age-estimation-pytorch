@@ -63,7 +63,11 @@ def get_model2(model_name="se_resnext50_32x4d", method=None, num_classes=101, pr
     elif method == "residual":
         return ResidualModel(base_model, dim_feats, num_classes)
 
-    else:  # comportement par défaut
+    elif method in ["gaussian", "laplace"]:
+        base_model.last_linear = RegressionHead(dim_feats, mode=method)
+        return base_model
+
+    else:
         base_model.last_linear = nn.Linear(dim_feats, num_classes)
         return base_model
 """ 
