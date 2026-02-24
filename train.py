@@ -177,7 +177,7 @@ def validate(validate_loader, model, criterion, epoch, device, method="cls"):
                 if method == "residual":
                     cls_logits, residual = outputs
                     predicted = cls_logits.argmax(1)
-                    final_age = predicted.float() + residual.squeeze(1)
+                    final_age = predicted.float() + residual.squeeze()
 
                     preds.append(final_age.cpu().numpy())
 
