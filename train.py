@@ -6,6 +6,7 @@ import better_exceptions
 from pathlib import Path
 from collections import OrderedDict
 from tqdm import tqdm
+
 import torch
 import torch.nn as nn
 import torch.nn.parallel
@@ -18,9 +19,10 @@ import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 import pretrainedmodels
 import pretrainedmodels.utils
-from model import get_model
+from model import get_model2
 from dataset import FaceDataset
 from defaults import _C as cfg
+
 
 def get_args():
     model_names = sorted(name for name in pretrainedmodels.__dict__
@@ -38,6 +40,19 @@ def get_args():
                         help="Modify config options using the command-line")
     args = parser.parse_args()
     return args
+
+# à appeler pour recup le mode choisi
+def get_criterion(mode, alpha=0.5, device="cpu"):
+    if mode == "residual":
+        return ResidualLoss(alpha=alpha).to(device)
+    elif mode == "dex":
+        return nn.CrossEntropyLoss().to(device)
+    elif mode == "gaussian":
+        return GaussianLikelihoodLoss().to(device)
+    elif mode == "laplace":
+        return LaplaceLikelihoodLoss().to(device) 
+    else:
+        raise ValueError(f"Unknown mode: {mode}")
 
 
 """
@@ -78,88 +93,99 @@ Affiche les statistiques en temps réel avec tqdm.
 
 Résultat : la loss et l’accuracy moyenne pour l’epoch.
 """
-def train(train_loader, model, criterion, optimizer, epoch, device):
-    model.train()
-    loss_monitor = AverageMeter()
-    accuracy_monitor = AverageMeter()
+def run_epoch(loader, model, criterion, optimizer, epoch, device, mode, is_train):
+    model.train() if is_train else model.eval()
+    loss_meter = AverageMeter()
+    mae_meter = AverageMeter()
+    accN_meter = AverageMeter()  # pour accuracy ±N ans
 
-    with tqdm(train_loader) as _tqdm:
+    ctx = torch.enable_grad() if is_train else torch.no_grad()
+    stage = "train" if is_train else "val"
+
+    with ctx, tqdm(loader) as _tqdm:
         for x, y in _tqdm:
-            x = x.to(device)
-            y = y.to(device)
-
-            # compute output
+            x, y = x.to(device), y.to(device)
             outputs = model(x)
 
-            # calc loss
             loss = criterion(outputs, y)
-            cur_loss = loss.item()
+            preds = compute_predictions(outputs, mode, device)
 
-            # calc accuracy
-            _, predicted = outputs.max(1)
-            correct_num = predicted.eq(y).sum().item()
+            loss_meter.update(loss.item(), x.size(0))
+            abs_error = (preds - y.float()).abs()
+            mae_meter.update(abs_error.sum().item(), x.size(0))
+            N = 3  # ça c'est pour dire on a faut si on c'est trompé de +- 3 ans (écart type)
+            within_N = (abs_error <= N).float()
+            accN_meter.update(within_N.sum().item(), x.size(0))
 
-            # measure accuracy and record loss
-            sample_num = x.size(0)
-            loss_monitor.update(cur_loss, sample_num)
-            accuracy_monitor.update(correct_num, sample_num)
+            if is_train:
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
 
-            # compute gradient and do SGD step
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+            _tqdm.set_postfix(OrderedDict(
+                stage=stage, epoch=epoch,
+                loss=f"{loss_meter.avg:.4f}",
+                mae=f"{mae_meter.avg:.4f}",
+                accN=f"{accN_meter.avg:.4f}"
+            ))
 
-            _tqdm.set_postfix(OrderedDict(stage="train", epoch=epoch, loss=loss_monitor.avg),
-                              acc=accuracy_monitor.avg, correct=correct_num, sample_num=sample_num)
+    return loss_meter.avg, mae_meter.avg, accN_meter.avg
 
-    return loss_monitor.avg, accuracy_monitor.avg
+def compute_predictions(outputs, mode, device):
+    """Extrait les âges prédits depuis les sorties du modèle."""
+    if mode == "dex":
+        ages = torch.arange(0, 101, device=device).float()
+        probs = F.softmax(outputs, dim=-1)
+        return (probs * ages).sum(dim=1)
+    elif mode == "residual":
+        cls_logits, residual = outputs
+        return cls_logits.argmax(1).float() + residual.squeeze(1)
+    elif mode in ["gaussian", "laplace"]:
+        mu, _ = outputs
+        return mu.clamp(0, 100)
+    else:
+        raise ValueError(f"Unknown mode: {mode}")
 
 
-# meme chose que train mais elle calcule MAE 
-def validate(validate_loader, model, criterion, epoch, device):
-    model.eval()
-    loss_monitor = AverageMeter()
-    accuracy_monitor = AverageMeter()
-    preds = []
-    gt = []
+class ResidualLoss(nn.Module):
+    def __init__(self, alpha=0.5):
+        super().__init__()
+        self.cls_loss = nn.CrossEntropyLoss()
+        self.res_loss = nn.MSELoss()
+        self.alpha = alpha
 
-    with torch.no_grad():
-        with tqdm(validate_loader) as _tqdm:
-            for i, (x, y) in enumerate(_tqdm):
-                x = x.to(device)
-                y = y.to(device)
+    def forward(self, outputs, target):
+        """
+        outputs = (cls_logits, residual)
+        target = true age (LongTensor)
+        """
+        cls_logits, residual = outputs
+        # classification loss
+        loss_cls = self.cls_loss(cls_logits, target)
+        # predicted class
+        pred_class = cls_logits.argmax(dim=1)
+        # residual target
+        residual_target = target.float() - pred_class.float()
+        loss_res = self.res_loss(residual, residual_target)
+        return loss_cls + self.alpha * loss_res
 
-                # compute output
-                outputs = model(x)
-                preds.append(F.softmax(outputs, dim=-1).cpu().numpy())
-                gt.append(y.cpu().numpy())
+class GaussianLikelihoodLoss(nn.Module):
+    def __init__(self):
+        super().__init__()
 
-                # valid for validation, not used for test
-                if criterion is not None:
-                    # calc loss
-                    loss = criterion(outputs, y)
-                    cur_loss = loss.item()
+    def forward(self, outputs, target):
+        mu, log_var = outputs
+        precision = torch.exp(-log_var)
+        return (precision * (target - mu)**2 + log_var).mean()
 
-                    # calc accuracy
-                    _, predicted = outputs.max(1)
-                    correct_num = predicted.eq(y).sum().item()
+class LaplaceLikelihoodLoss(nn.Module):
+    def __init__(self):
+        super().__init__()
 
-                    # measure accuracy and record loss
-                    sample_num = x.size(0)
-                    loss_monitor.update(cur_loss, sample_num)
-                    accuracy_monitor.update(correct_num, sample_num)
-                    _tqdm.set_postfix(OrderedDict(stage="val", epoch=epoch, loss=loss_monitor.avg),
-                                      acc=accuracy_monitor.avg, correct=correct_num, sample_num=sample_num)
-
-    preds = np.concatenate(preds, axis=0)
-    gt = np.concatenate(gt, axis=0)
-    ages = np.arange(0, 101)
-    ave_preds = (preds * ages).sum(axis=-1)
-    diff = ave_preds - gt
-    mae = np.abs(diff).mean()
-
-    return loss_monitor.avg, accuracy_monitor.avg, mae
-
+    def forward(self, outputs, target):
+        mu, log_b = outputs
+        b = torch.exp(log_b)
+        return ((target - mu).abs() / b + log_b).mean()
 
 def main():
     args = get_args()
@@ -174,8 +200,9 @@ def main():
 
     # create model
     print("=> creating model '{}'".format(cfg.MODEL.ARCH))
-    model = get_model(model_name=cfg.MODEL.ARCH)
+    model = get_model2(model_name=cfg.MODEL.ARCH, method=cfg.MODEL.METHOD)
 
+    # choisi l'optimizer 
     if cfg.TRAIN.OPT == "sgd":
         optimizer = torch.optim.SGD(model.parameters(), lr=cfg.TRAIN.LR,
                                     momentum=cfg.TRAIN.MOMENTUM,
@@ -207,7 +234,9 @@ def main():
     if device == "cuda":
         cudnn.benchmark = True
 
-    criterion = nn.CrossEntropyLoss().to(device)
+    # choix de la methode de calcul de la loss, modifier la méthode ds defaults.py
+    criterion = get_criterion(cfg.MODEL.METHOD, alpha=0.5, device=device)
+
     train_dataset = FaceDataset(args.data_dir, "train", img_size=cfg.MODEL.IMG_SIZE, augment=True,
                                 age_stddev=cfg.TRAIN.AGE_STDDEV)
     train_loader = DataLoader(train_dataset, batch_size=cfg.TRAIN.BATCH_SIZE, shuffle=True,
@@ -217,6 +246,7 @@ def main():
     val_loader = DataLoader(val_dataset, batch_size=cfg.TEST.BATCH_SIZE, shuffle=False,
                             num_workers=cfg.TRAIN.WORKERS, drop_last=False)
 
+    # Pour que le learning rate diminue pendant l'entrainement
     scheduler = StepLR(optimizer, step_size=cfg.TRAIN.LR_DECAY_STEP, gamma=cfg.TRAIN.LR_DECAY_RATE,
                        last_epoch=start_epoch - 1)
     best_val_mae = 10000.0
@@ -228,14 +258,12 @@ def main():
         val_writer = SummaryWriter(log_dir=args.tensorboard + "/" + opts_prefix + "_val")
 
     for epoch in range(start_epoch, cfg.TRAIN.EPOCHS):
-        # train
-        train_loss, train_acc = train(train_loader, model, criterion, optimizer, epoch, device)
-
-        # validate
-        val_loss, val_acc, val_mae = validate(val_loader, model, criterion, epoch, device)
+        train_loss, train_mae , train_acc= run_epoch(train_loader, model, criterion, optimizer, epoch, device, mode=cfg.MODEL.METHOD, is_train=True)
+        val_loss, val_mae, val_acc = run_epoch(val_loader, model, criterion, None, epoch, device, mode=cfg.MODEL.METHOD, is_train=False)
 
         if args.tensorboard is not None:
             train_writer.add_scalar("loss", train_loss, epoch)
+            train_writer.add_scalar("mae", train_mae, epoch)
             train_writer.add_scalar("acc", train_acc, epoch)
             val_writer.add_scalar("loss", val_loss, epoch)
             val_writer.add_scalar("acc", val_acc, epoch)

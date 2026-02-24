@@ -9,10 +9,12 @@ import torch.utils.data
 from torch.utils.data import DataLoader
 import pretrainedmodels
 import pretrainedmodels.utils
-from model import get_model
+from model import get_model2
 from dataset import FaceDataset
 from defaults import _C as cfg
-from train import validate
+from train import run_epoch, get_criterion
+
+
 
 
 def get_args():
@@ -40,7 +42,7 @@ def main():
 
     # create model
     print("=> creating model '{}'".format(cfg.MODEL.ARCH))
-    model = get_model(model_name=cfg.MODEL.ARCH, pretrained=None)
+    model = get_model2(model_name=cfg.MODEL.ARCH,method=cfg.MODEL.METHOD, pretrained=None)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = model.to(device)
 
@@ -62,9 +64,12 @@ def main():
     test_loader = DataLoader(test_dataset, batch_size=cfg.TEST.BATCH_SIZE, shuffle=False,
                              num_workers=cfg.TRAIN.WORKERS, drop_last=False)
 
+    criterion = get_criterion(cfg.MODEL.METHOD, alpha=0.5, device=device)
     print("=> start testing")
-    _, _, test_mae = validate(test_loader, model, None, 0, device)
+    test_loss, test_mae, test_acc = run_epoch(test_loader, model, criterion, None, 0, device, mode=cfg.MODEL.METHOD, is_train=False)
+    print(f"test loss: {test_loss:.3f}")
     print(f"test mae: {test_mae:.3f}")
+    print(f"test acc: {test_acc:.3f}")
 
 
 if __name__ == '__main__':
