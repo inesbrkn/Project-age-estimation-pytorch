@@ -24,6 +24,33 @@ from dataset import FaceDataset
 from defaults import _C as cfg
 
 
+def set_seed(seed):
+    """Fixe les seeds pour des runs reproductibles (comparaison DEX vs Residual équitable)."""
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    # On laisse cudnn.benchmark à True (défini plus bas en main) pour la vitesse ; pour une reproductibilité
+    # stricte sur GPU, mettre cudnn.benchmark = False après cet appel.
+
+
+def _load_state_dict_into_model(model, state_dict):
+    """
+    Charge le state_dict dans le modèle en gérant le préfixe DataParallel.
+
+    Pourquoi c'est nécessaire :
+    - Avec nn.DataParallel(model), PyTorch enregistre les paramètres sous des clés "module.conv1", etc.
+    - En mono-GPU (ex. Colab) le modèle n'a pas ce préfixe, donc load_state_dict() échoue ou ignore des clés.
+    - Cette fonction détecte les clés "module.*" et les renomme en retirant "module." (7 caractères),
+      pour qu'un même fichier .pth fonctionne après entraînement multi-GPU comme en évaluation mono-GPU.
+    """
+    if not any(k.startswith("module.") for k in state_dict.keys()):
+        model.load_state_dict(state_dict)
+        return
+    new_state_dict = OrderedDict((k[7:] if k.startswith("module.") else k, v) for k, v in state_dict.items())
+    model.load_state_dict(new_state_dict)
+
 def get_args():
     model_names = sorted(name for name in pretrainedmodels.__dict__
                          if not name.startswith("__")
@@ -72,6 +99,28 @@ class AverageMeter(object):
         self.count += n
         self.avg = self.sum / self.count
 
+def mae_by_age_group(preds, gt, groups=None):
+    """
+    Calcule le MAE par tranche d'âge (ex. enfants 0-17, adultes 18-45, seniors 46+).
+    groups: liste de (min_age, max_age) inclus. Par défaut cfg.TEST.AGE_GROUPS.
+    Retourne une liste de dict avec 'name', 'mae', 'count', 'std' (écart-type des erreurs absolues).
+    """
+    if groups is None:
+        groups = cfg.TEST.AGE_GROUPS
+    preds = np.asarray(preds)
+    gt = np.asarray(gt)
+    errors = np.abs(preds - gt)
+    results = []
+    for low, high in groups:
+        mask = (gt >= low) & (gt <= high)
+        n = mask.sum()
+        if n == 0:
+            results.append({"name": f"{low}-{high}", "mae": np.nan, "count": 0, "std": np.nan})
+            continue
+        mae = errors[mask].mean()
+        std = errors[mask].std()
+        results.append({"name": f"{low}-{high}", "mae": float(mae), "count": int(n), "std": float(std)})
+    return results
 
 """ -- > Entraine le modèle
 
@@ -93,41 +142,65 @@ Affiche les statistiques en temps réel avec tqdm.
 
 Résultat : la loss et l’accuracy moyenne pour l’epoch.
 """
-def run_epoch(loader, model, criterion, optimizer, epoch, device, mode, is_train):
+def run_epoch(loader,model,criterion,optimizer,epoch,device,mode,is_train,return_preds=False):
     model.train() if is_train else model.eval()
+
     loss_meter = AverageMeter()
     mae_meter = AverageMeter()
-    accN_meter = AverageMeter()  # pour accuracy ±N ans
+    accN_meter = AverageMeter()
+
+    all_preds = []
+    all_gt = []
 
     ctx = torch.enable_grad() if is_train else torch.no_grad()
     stage = "train" if is_train else "val"
 
     with ctx, tqdm(loader) as _tqdm:
         for x, y in _tqdm:
-            x, y = x.to(device), y.to(device)
-            outputs = model(x)
+            x = x.to(device, non_blocking=True)
+            y = y.to(device, non_blocking=True)
 
+            outputs = model(x)
             loss = criterion(outputs, y)
+
             preds = compute_predictions(outputs, mode, device)
 
-            loss_meter.update(loss.item(), x.size(0))
+            # ===== MAE correct =====
             abs_error = (preds - y.float()).abs()
-            mae_meter.update(abs_error.sum().item(), x.size(0))
-            N = 3  # ça c'est pour dire on a faut si on c'est trompé de +- 3 ans (écart type)
-            within_N = (abs_error <= N).float()
-            accN_meter.update(within_N.sum().item(), x.size(0))
+            mae_meter.update(abs_error.mean().item(), x.size(0))
 
+            # ===== accuracy ±N ans =====
+            N = 3
+            within_N = (abs_error <= N).float()
+            accN_meter.update(within_N.mean().item(), x.size(0))
+
+            loss_meter.update(loss.item(), x.size(0))
+
+            # ===== stockage optionnel =====
+            if return_preds:
+                all_preds.append(preds.detach().cpu())
+                all_gt.append(y.detach().cpu())
+
+            # ===== backward =====
             if is_train:
-                optimizer.zero_grad()
+                optimizer.zero_grad(set_to_none=True)
                 loss.backward()
                 optimizer.step()
 
-            _tqdm.set_postfix(OrderedDict(
-                stage=stage, epoch=epoch,
-                loss=f"{loss_meter.avg:.4f}",
-                mae=f"{mae_meter.avg:.4f}",
-                accN=f"{accN_meter.avg:.4f}"
-            ))
+            _tqdm.set_postfix(
+                OrderedDict(
+                    stage=stage,
+                    epoch=epoch,
+                    loss=f"{loss_meter.avg:.4f}",
+                    mae=f"{mae_meter.avg:.4f}",
+                    accN=f"{accN_meter.avg:.4f}",
+                )
+            )
+
+    if return_preds:
+        all_preds = torch.cat(all_preds).numpy()
+        all_gt = torch.cat(all_gt).numpy()
+        return loss_meter.avg, mae_meter.avg, accN_meter.avg, all_preds, all_gt
 
     return loss_meter.avg, mae_meter.avg, accN_meter.avg
 
@@ -137,12 +210,15 @@ def compute_predictions(outputs, mode, device):
         ages = torch.arange(0, 101, device=device).float()
         probs = F.softmax(outputs, dim=-1)
         return (probs * ages).sum(dim=1)
+
     elif mode == "residual":
         cls_logits, residual = outputs
-        return cls_logits.argmax(1).float() + residual.squeeze(1)
+        return cls_logits.argmax(1).float() + residual.squeeze(-1)
+
     elif mode in ["gaussian", "laplace"]:
         mu, _ = outputs
-        return mu.clamp(0, 100)
+        return mu.squeeze(-1).clamp(0, 100)
+
     else:
         raise ValueError(f"Unknown mode: {mode}")
 
@@ -194,6 +270,7 @@ def main():
         cfg.merge_from_list(args.opts)
 
     cfg.freeze()
+    set_seed(cfg.TRAIN.SEED)
     start_epoch = 0
     checkpoint_dir = Path(args.checkpoint)
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -213,21 +290,33 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = model.to(device)
 
-    # optionally resume from a checkpoint
+    # ----- Reprise depuis un checkpoint (--resume) -----
+    # On charge AVANT d'envelopper le modèle avec DataParallel, pour pouvoir utiliser
+    # _load_state_dict_into_model et accepter un checkpoint sauvegardé avec ou sans DataParallel.
     resume_path = args.resume
+    checkpoint = None
 
     if resume_path:
         if Path(resume_path).is_file():
-            print("=> loading checkpoint '{}'".format(resume_path))
+            print(f"=> loading checkpoint '{resume_path}'")
             checkpoint = torch.load(resume_path, map_location="cpu")
-            start_epoch = checkpoint['epoch']
-            model.load_state_dict(checkpoint['state_dict'])
-            print("=> loaded checkpoint '{}' (epoch {})"
-                  .format(resume_path, checkpoint['epoch']))
-            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        else:
-            print("=> no checkpoint found at '{}'".format(resume_path))
 
+            start_epoch = checkpoint["epoch"]
+
+            # ✅ load robuste
+            _load_state_dict_into_model(model, checkpoint["state_dict"])
+
+            if "optimizer_state_dict" in checkpoint:
+                optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+
+            best_val_mae = checkpoint.get("best_val_mae", 10000.0)
+
+            print(f"=> loaded checkpoint '{resume_path}' (epoch {start_epoch})")
+        else:
+            print(f"=> no checkpoint found at '{resume_path}'")
+            best_val_mae = 10000.0
+    else:
+        best_val_mae = 10000.0    
     if args.multi_gpu:
         model = nn.DataParallel(model)
 
@@ -278,9 +367,12 @@ def main():
                     'epoch': epoch + 1,
                     'arch': cfg.MODEL.ARCH,
                     'state_dict': model_state_dict,
-                    'optimizer_state_dict': optimizer.state_dict()
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'scheduler_state_dict': scheduler.state_dict(),
+                    'best_val_mae': val_mae,
                 },
-                str(checkpoint_dir.joinpath("epoch{:03d}_{:.5f}_{:.4f}.pth".format(epoch, val_loss, val_mae)))
+
+                str(checkpoint_dir.joinpath("epoch{:03d}_{:.5f}_{:.4f}_{:.5f}.pth".format(epoch, val_loss, val_mae, val_acc)))
             )
             best_val_mae = val_mae
         else:

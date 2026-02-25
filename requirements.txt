@@ -10,3 +10,4 @@ torch==1.1.0
 torchvision==0.3.0
 tqdm==4.32.2
 yacs==0.1.6
+albumentations

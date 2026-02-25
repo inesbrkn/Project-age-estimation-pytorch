@@ -12,7 +12,7 @@ import pretrainedmodels.utils
 from model import get_model2
 from dataset import FaceDataset
 from defaults import _C as cfg
-from train import run_epoch, get_criterion
+from train import mae_by_age_group, run_epoch, get_criterion
 
 
 
@@ -66,11 +66,26 @@ def main():
 
     criterion = get_criterion(cfg.MODEL.METHOD, alpha=0.5, device=device)
     print("=> start testing")
-    test_loss, test_mae, test_acc = run_epoch(test_loader, model, criterion, None, 0, device, mode=cfg.MODEL.METHOD, is_train=False)
+    test_loss, test_mae, test_acc, preds, gt = run_epoch(
+    test_loader,
+    model,
+    criterion,
+    None,
+    0,
+    device,
+    mode=cfg.MODEL.METHOD,
+    is_train=False,
+    return_preds=True,  # ici pour dire de calculer preds et gt
+    )    
     print(f"test loss: {test_loss:.3f}")
     print(f"test mae: {test_mae:.3f}")
     print(f"test acc: {test_acc:.3f}")
 
+     # MAE par tranche d'âge (enfants / adultes / seniors) pour analyse des erreurs
+    group_results = mae_by_age_group(preds, gt)
+    print("=> MAE by age group:")
+    for r in group_results:
+        print(f"  {r['name']} yrs: mae={r['mae']:.3f}, n={r['count']}, std(err)={r['std']:.3f}")
 
 if __name__ == '__main__':
     main()
