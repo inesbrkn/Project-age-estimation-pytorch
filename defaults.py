@@ -5,7 +5,8 @@ _C = CN()
 # Model
 _C.MODEL = CN()
 # Backbone : python train.py -h liste les noms. Ex. se_resnext50_32x4d, resnet18, resnet50, etc.
-_C.MODEL.ARCH = "se_resnext50_32x4d"
+#_C.MODEL.ARCH = "se_resnext50_32x4d"
+_C.MODEL.ARCH = "efficientnet_b0"
 _C.MODEL.IMG_SIZE = 224
 _C.MODEL.METHOD = "residual"  # "dex" ou "residual" pour comparer les deux (même config recommandée)
 _C.MODEL.LABEL_SMOOTHING = 0.1  # 0.1 souvent bénéfique pour la généralisation (classification)
