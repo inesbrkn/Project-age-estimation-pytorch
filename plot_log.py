@@ -98,7 +98,7 @@ def plot_mae_heatmap(results):
 # Read tensorboard scalars
 # =========================================================
 def read_scalars(log_dir, tag):
-    ea = event_accumulator.EventAccumulator(log_dir)
+    ea = event_accumulator.EventAccumulator(str(log_dir))
     ea.Reload()
 
     if tag not in ea.Tags()["scalars"]:
@@ -120,15 +120,17 @@ def plot_two_methods(train_logs, val_logs, names, title=None, save_path=None):
     Affiche train/val loss et MAE pour deux méthodes
     """
     plt.figure(figsize=(12,5))
-
+    ea = event_accumulator.EventAccumulator("tf_log/dex_train")
+    ea.Reload()
+    print(ea.Tags()["scalars"])
     # Loss subplot
     plt.subplot(1,2,1)
-    for t_log, v_log, name in zip(train_logs, val_logs, names):
+    for t_log,  name in zip(train_logs, names):
         train_loss = read_scalars(t_log, "loss")
-        val_loss = read_scalars(v_log, "loss")
+        #val_loss = read_scalars(v_log, "loss")
         epochs = np.arange(1, len(train_loss)+1)
         plt.plot(epochs, train_loss, linestyle="--", label=f"{name} train")
-        plt.plot(epochs, val_loss, linestyle="-", label=f"{name} val")
+        #plt.plot(epochs, val_loss, linestyle="-", label=f"{name} val")
     plt.xlabel("Epoch")
     plt.ylabel("Loss")
     plt.title("Loss comparison")
@@ -136,6 +138,7 @@ def plot_two_methods(train_logs, val_logs, names, title=None, save_path=None):
     plt.grid(alpha=0.3)
 
     # MAE subplot
+    """
     plt.subplot(1,2,2)
     for t_log, v_log, name in zip(train_logs, val_logs, names):
         train_mae = read_scalars(t_log, "mae")
@@ -150,6 +153,7 @@ def plot_two_methods(train_logs, val_logs, names, title=None, save_path=None):
     plt.grid(alpha=0.3)
 
     plt.tight_layout()
+    """
     if save_path:
         plt.savefig(save_path)
         print(f"Saved figure to {save_path}")
@@ -163,19 +167,21 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--logdir", type=str, required=True)
     parser.add_argument("--title", type=str, default="Training curves")
-    parser.add_argument("--compare", action="store_true", help="Comparer deux méthodes DEX vs Laplace")
+    parser.add_argument("--compare", action="store_true", help="Comparer trois model DEX vs Laplace vs Gaussian")
     args = parser.parse_args()
 
     logdir = Path(args.logdir)
 
     if args.compare:
         # Dossiers TensorBoard pour DEX, Laplace, Gaussian
-        dex_train = logdir / "dex" / "_train"
-        dex_val   = logdir / "dex" / "_val"
-        lap_train = logdir / "laplace" / "_train"
-        lap_val   = logdir / "laplace" / "_val"
-        gaus_train = logdir / "gaussian" / "_train"
-        gaus_val   = logdir / "gaussian" / "_val"
+        dex_train = logdir / "dex_train"
+        dex_val   = logdir / "dex_val"
+
+        lap_train = logdir / "MODEL.METHOD_laplace_train"
+        lap_val   = logdir / "MODEL.METHOD_laplace_val"
+
+        gaus_train = logdir / "gaussian_train"
+        gaus_val   = logdir / "gaussian_val"
 
         plot_two_methods(   
             train_logs=[dex_train, lap_train, gaus_train],
