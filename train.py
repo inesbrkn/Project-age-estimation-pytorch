@@ -111,26 +111,7 @@ def compute_predictions(outputs, mode, device):
     else:
         raise ValueError(f"Unknown mode: {mode}")
 
-""" -- > Entraine le modèle
 
-1) Parcourt toutes les images du train_loader.
-
-2) Pour chaque batch :
-
-- Envoie les images et labels sur le GPU (x.to(device)).
-
-- Calcule la sortie du modèle (outputs = model(x)).
-
-- Calcule la loss (criterion(outputs, y)).
-
-- Calcule la précision du batch.
-
-- Fait la rétropropagation (loss.backward()) et met à jour les poids w et b en fonction de alpha et gradient calculé avec loss.backward(optimizer.step()).
-
-Affiche les statistiques en temps réel avec tqdm.
-
-Résultat : la loss et l’accuracy moyenne pour l’epoch.
-"""
 def run_epoch(loader,model,criterion,optimizer,epoch,device,mode,is_train,return_preds=False):
     model.train() if is_train else model.eval()
 
@@ -159,7 +140,7 @@ def run_epoch(loader,model,criterion,optimizer,epoch,device,mode,is_train,return
             mae_meter.update(abs_error.sum().item(), x.size(0))
 
             # ===== accuracy ±N ans =====
-            if mode in ["dex", "residual"]:
+            if cfg.CLASSIFIER == True:
                 predicted_class = outputs[0].argmax(1) if mode == "residual" else outputs.argmax(1)
                 correct_num = (predicted_class == y).sum().item()
                 accN_meter.update(correct_num, x.size(0))
