@@ -1,7 +1,7 @@
 import torch.nn as nn
 import pretrainedmodels
 import pretrainedmodels.utils
-
+import timm
 """
     crée un modèle CNN pré-entraîné adapté à la prédiction d'âges.
 
@@ -75,6 +75,55 @@ def get_model(model_name="se_resnext50_32x4d", num_classes=101, pretrained="imag
     return model
 """
 
+def get_model(model_name="se_resnext50_32x4d", method=None, num_classes=101, pretrained="imagenet"):
+    use_timm = model_name.startswith("efficientnet") or model_name in timm.list_models()
+
+    if use_timm:
+        base_model = timm.create_model(model_name, pretrained=(pretrained == "imagenet"))
+        dim_feats = base_model.num_features
+        base_model.reset_classifier(0)
+
+        class TimmWrapper(nn.Module):
+          def __init__(self, backbone):
+              super().__init__()
+              self.backbone = backbone
+
+          def forward_features(self, x):
+              # timm create_model a déjà forward_features
+              return self.backbone.forward_features(x)
+
+          # ajouter un alias pour compatibilité
+          def features(self, x):
+              return self.forward_features(x)
+
+        base_model = TimmWrapper(base_model)
+
+    else:
+        base_model = pretrainedmodels.__dict__[model_name](pretrained=pretrained)
+        dim_feats = base_model.last_linear.in_features
+        base_model.avg_pool = nn.AdaptiveAvgPool2d(1)
+
+    # ===== heads =====
+    if method == "dex":
+        return nn.Sequential(
+            base_model,
+            nn.Flatten(),
+            nn.Linear(dim_feats, num_classes)
+        )
+
+    elif method == "residual":
+        return ResidualModel(base_model, dim_feats, num_classes)
+
+    elif method in ["gaussian", "laplace"]:
+        return RegressionModel(base_model, dim_feats, mode=method)
+
+    else:
+        return nn.Sequential(
+            base_model,
+            nn.Flatten(),
+            nn.Linear(dim_feats, num_classes)
+        )
+    
 def get_model2(model_name="se_resnext50_32x4d", method=None, num_classes=101, pretrained="imagenet"):
     """
     Retourne un modèle adapté à la méthode choisie :

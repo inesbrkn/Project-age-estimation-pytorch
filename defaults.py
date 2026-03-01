@@ -21,9 +21,9 @@ _C.TRAIN.LR_DECAY_RATE = 0.2
 _C.TRAIN.MOMENTUM = 0.9
 _C.TRAIN.WEIGHT_DECAY = 0.0
 _C.TRAIN.BATCH_SIZE = 60
-_C.TRAIN.EPOCHS = 80
+_C.TRAIN.EPOCHS = 30
 _C.TRAIN.AGE_STDDEV = 1.0
-
+_C.N = 0 # pour dire on veut que la prédiction vaut true si elle se situe dans un intervalle +- N de la vraie valeur
 # Test
 _C.TEST = CN()
 _C.TEST.WORKERS = 8

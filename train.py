@@ -23,6 +23,8 @@ from model import get_model2
 from dataset import FaceDataset
 from defaults import _C as cfg
 
+from visualize import plot_training_curves
+
 
 def set_seed(seed):
     """Fixe les seeds pour des runs reproductibles (comparaison DEX vs Residual équitable)."""
@@ -170,9 +172,14 @@ def run_epoch(loader,model,criterion,optimizer,epoch,device,mode,is_train,return
             mae_meter.update(abs_error.mean().item(), x.size(0))
 
             # ===== accuracy ±N ans =====
-            N = 3
-            within_N = (abs_error <= N).float()
-            accN_meter.update(within_N.mean().item(), x.size(0))
+            if mode in ["dex", "residual"]:
+                predicted_class = outputs[0].argmax(1) if mode == "residual" else outputs.argmax(1)
+                correct_num = (predicted_class == y).sum().item()
+                accN_meter.update(correct_num, x.size(0))
+            else :
+                N = int(cfg.N)
+                within_N = (abs_error <= N).float()
+                accN_meter.update(within_N.mean().item(), x.size(0))
 
             loss_meter.update(loss.item(), x.size(0))
 
@@ -303,7 +310,7 @@ def main():
 
             start_epoch = checkpoint["epoch"]
 
-            # ✅ load robuste
+            # load robuste
             _load_state_dict_into_model(model, checkpoint["state_dict"])
 
             if "optimizer_state_dict" in checkpoint:
@@ -340,11 +347,21 @@ def main():
                        last_epoch=start_epoch - 1)
     best_val_mae = 10000.0
     train_writer = None
-
+    history = {
+        "name": f"{cfg.MODEL.ARCH}-{cfg.MODEL.METHOD}",
+        "train_loss": [],
+        "val_loss": [],
+        "train_mae": [],
+        "val_mae": [],
+        "train_acc": [],
+        "val_acc": [],
+    }
     if args.tensorboard is not None:
         opts_prefix = "_".join(args.opts)
         train_writer = SummaryWriter(log_dir=args.tensorboard + "/" + opts_prefix + "_train")
         val_writer = SummaryWriter(log_dir=args.tensorboard + "/" + opts_prefix + "_val")
+
+    
 
     for epoch in range(start_epoch, cfg.TRAIN.EPOCHS):
         train_loss, train_mae , train_acc= run_epoch(train_loader, model, criterion, optimizer, epoch, device, mode=cfg.MODEL.METHOD, is_train=True)
@@ -357,7 +374,13 @@ def main():
             val_writer.add_scalar("loss", val_loss, epoch)
             val_writer.add_scalar("acc", val_acc, epoch)
             val_writer.add_scalar("mae", val_mae, epoch)
-
+        # ===== save history =====
+        history["train_loss"].append(train_loss)
+        history["val_loss"].append(val_loss)
+        history["train_mae"].append(train_mae)
+        history["val_mae"].append(val_mae)
+        history["train_acc"].append(train_acc)
+        history["val_acc"].append(val_acc)
         # checkpoint
         if val_mae < best_val_mae:
             print(f"=> [epoch {epoch:03d}] best val mae was improved from {best_val_mae:.3f} to {val_mae:.3f}")
@@ -385,6 +408,13 @@ def main():
     print(f"additional opts: {args.opts}")
     print(f"best val mae: {best_val_mae:.3f}")
 
+    plot_training_curves(
+        history["train_loss"],
+        history["val_loss"],
+        history["train_mae"],
+        history["val_mae"],
+        title=f"{history['name']}"
+    )   
 
 if __name__ == '__main__':
     main()
