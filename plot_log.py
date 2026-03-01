@@ -180,8 +180,8 @@ def main():
         lap_train = logdir / "MODEL.METHOD_laplace_train"
         lap_val   = logdir / "MODEL.METHOD_laplace_val"
 
-        gaus_train = logdir / "gaussian_train"
-        gaus_val   = logdir / "gaussian_val"
+        gaus_train = logdir / "MODEL.METHOD_gaussian_train"
+        gaus_val   = logdir / "MODEL.METHOD_gaussian_val"
 
         plot_two_methods(   
             train_logs=[dex_train, lap_train, gaus_train],

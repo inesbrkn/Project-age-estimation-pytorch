@@ -106,7 +106,8 @@ def compute_predictions(outputs, mode, device):
     elif mode in ["gaussian", "laplace"]:
         mu, _ = outputs
         return mu.squeeze(-1).clamp(0, 100)
-
+    elif  mode == "none" : 
+        return outputs.argmax(1).float()
     else:
         raise ValueError(f"Unknown mode: {mode}")
 
