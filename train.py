@@ -20,38 +20,12 @@ from torch.utils.tensorboard import SummaryWriter
 import pretrainedmodels
 import pretrainedmodels.utils
 from model import get_model2
+from losses import get_criterion
 from dataset import FaceDataset
 from defaults import _C as cfg
+import utils as u
+from plot_log import plot_training_curves
 
-from visualize import plot_training_curves
-
-
-def set_seed(seed):
-    """Fixe les seeds pour des runs reproductibles (comparaison DEX vs Residual équitable)."""
-    torch.manual_seed(seed)
-    np.random.seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.deterministic = True
-    # On laisse cudnn.benchmark à True (défini plus bas en main) pour la vitesse ; pour une reproductibilité
-    # stricte sur GPU, mettre cudnn.benchmark = False après cet appel.
-
-
-def _load_state_dict_into_model(model, state_dict):
-    """
-    Charge le state_dict dans le modèle en gérant le préfixe DataParallel.
-
-    Pourquoi c'est nécessaire :
-    - Avec nn.DataParallel(model), PyTorch enregistre les paramètres sous des clés "module.conv1", etc.
-    - En mono-GPU (ex. Colab) le modèle n'a pas ce préfixe, donc load_state_dict() échoue ou ignore des clés.
-    - Cette fonction détecte les clés "module.*" et les renomme en retirant "module." (7 caractères),
-      pour qu'un même fichier .pth fonctionne après entraînement multi-GPU comme en évaluation mono-GPU.
-    """
-    if not any(k.startswith("module.") for k in state_dict.keys()):
-        model.load_state_dict(state_dict)
-        return
-    new_state_dict = OrderedDict((k[7:] if k.startswith("module.") else k, v) for k, v in state_dict.items())
-    model.load_state_dict(new_state_dict)
 
 def get_args():
     model_names = sorted(name for name in pretrainedmodels.__dict__
@@ -69,20 +43,6 @@ def get_args():
                         help="Modify config options using the command-line")
     args = parser.parse_args()
     return args
-
-# à appeler pour recup le mode choisi
-def get_criterion(mode, alpha=0.5, device="cpu"):
-    if mode == "residual":
-        return ResidualLoss(alpha=alpha).to(device)
-    elif mode == "dex":
-        return nn.CrossEntropyLoss().to(device)
-    elif mode == "gaussian":
-        return GaussianLikelihoodLoss().to(device)
-    elif mode == "laplace":
-        return LaplaceLikelihoodLoss().to(device) 
-    else:
-        raise ValueError(f"Unknown mode: {mode}")
-
 
 """
 Sert à suivre la perte (loss) et la précision (accuracy) pendant l’entraînement et la validation.
@@ -123,6 +83,26 @@ def mae_by_age_group(preds, gt, groups=None):
         std = errors[mask].std()
         results.append({"name": f"{low}-{high}", "mae": float(mae), "count": int(n), "std": float(std)})
     return results
+
+def compute_predictions(outputs, mode, device):
+    """Extrait les âges prédits depuis les sorties du modèle."""
+    if mode == "dex":
+        ages = torch.arange(0, 101, device=device).float()
+        probs = F.softmax(outputs, dim=-1)
+        return (probs * ages).sum(dim=1)
+
+    elif mode == "residual":
+        cls_logits, residual = outputs
+        return cls_logits.argmax(1).float() + residual.squeeze(-1)
+
+    elif mode in ["gaussian", "laplace"]:
+        mu, _ = outputs
+        return mu.squeeze(-1).clamp(0, 100)
+
+    else:
+        raise ValueError(f"Unknown mode: {mode}")
+
+
 
 """ -- > Entraine le modèle
 
@@ -211,65 +191,6 @@ def run_epoch(loader,model,criterion,optimizer,epoch,device,mode,is_train,return
 
     return loss_meter.avg, mae_meter.avg, accN_meter.avg
 
-def compute_predictions(outputs, mode, device):
-    """Extrait les âges prédits depuis les sorties du modèle."""
-    if mode == "dex":
-        ages = torch.arange(0, 101, device=device).float()
-        probs = F.softmax(outputs, dim=-1)
-        return (probs * ages).sum(dim=1)
-
-    elif mode == "residual":
-        cls_logits, residual = outputs
-        return cls_logits.argmax(1).float() + residual.squeeze(-1)
-
-    elif mode in ["gaussian", "laplace"]:
-        mu, _ = outputs
-        return mu.squeeze(-1).clamp(0, 100)
-
-    else:
-        raise ValueError(f"Unknown mode: {mode}")
-
-
-class ResidualLoss(nn.Module):
-    def __init__(self, alpha=0.5):
-        super().__init__()
-        self.cls_loss = nn.CrossEntropyLoss()
-        self.res_loss = nn.MSELoss()
-        self.alpha = alpha
-
-    def forward(self, outputs, target):
-        """
-        outputs = (cls_logits, residual)
-        target = true age (LongTensor)
-        """
-        cls_logits, residual = outputs
-        # classification loss
-        loss_cls = self.cls_loss(cls_logits, target)
-        # predicted class
-        pred_class = cls_logits.argmax(dim=1)
-        # residual target
-        residual_target = target.float() - pred_class.float()
-        loss_res = self.res_loss(residual, residual_target)
-        return loss_cls + self.alpha * loss_res
-
-class GaussianLikelihoodLoss(nn.Module):
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, outputs, target):
-        mu, log_var = outputs
-        precision = torch.exp(-log_var)
-        return (precision * (target - mu)**2 + log_var).mean()
-
-class LaplaceLikelihoodLoss(nn.Module):
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, outputs, target):
-        mu, log_b = outputs
-        b = torch.exp(log_b)
-        return ((target - mu).abs() / b + log_b).mean()
-
 def main():
     args = get_args()
 
@@ -277,7 +198,7 @@ def main():
         cfg.merge_from_list(args.opts)
 
     cfg.freeze()
-    set_seed(cfg.TRAIN.SEED)
+    u.set_seed(cfg.TRAIN.SEED)
     start_epoch = 0
     checkpoint_dir = Path(args.checkpoint)
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -311,7 +232,7 @@ def main():
             start_epoch = checkpoint["epoch"]
 
             # load robuste
-            _load_state_dict_into_model(model, checkpoint["state_dict"])
+            u._load_state_dict_into_model(model, checkpoint["state_dict"])
 
             if "optimizer_state_dict" in checkpoint:
                 optimizer.load_state_dict(checkpoint["optimizer_state_dict"])

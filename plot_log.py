@@ -2,6 +2,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 import pandas as pd
+import argparse
+from pathlib import Path
+
+from tensorboard.backend.event_processing import event_accumulator
 
 
 # ======================================================
@@ -86,3 +90,54 @@ def plot_mae_heatmap(results):
     plt.title("MAE comparison across models and methods")
     plt.tight_layout()
     plt.show()
+
+
+# =========================================================
+# Read tensorboard scalars
+# =========================================================
+def read_scalars(log_dir, tag):
+    ea = event_accumulator.EventAccumulator(log_dir)
+    ea.Reload()
+
+    if tag not in ea.Tags()["scalars"]:
+        print(f"[WARN] tag '{tag}' not found in {log_dir}")
+        return []
+
+    events = ea.Scalars(tag)
+    values = [e.value for e in events]
+    return values
+
+
+# =========================================================
+# Main
+# =========================================================
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--logdir", type=str, required=True)
+    parser.add_argument("--title", type=str, default="Training curves")
+    args = parser.parse_args()
+
+    logdir = Path(args.logdir)
+
+    train_log = logdir / "_train"
+    val_log = logdir / "_val"
+
+    print("Reading TensorBoard logs...")
+
+    train_loss = read_scalars(train_log, "loss")
+    val_loss = read_scalars(val_log, "loss")
+
+    train_mae = read_scalars(train_log, "mae")
+    val_mae = read_scalars(val_log, "mae")
+
+    plot_training_curves(
+        train_loss,
+        val_loss,
+        train_mae,
+        val_mae,
+        title=args.title,
+    )
+
+
+if __name__ == "__main__":
+    main()

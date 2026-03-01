@@ -61,68 +61,8 @@ class RegressionModel(nn.Module):
         feats = self.base.avg_pool(feats).view(feats.size(0), -1)
         return self.head(feats)
 
-"""
-def get_model(model_name="se_resnext50_32x4d", num_classes=101, pretrained="imagenet"):
-    model = pretrainedmodels.__dict__[model_name](pretrained=pretrained)
-    # Récupérer la dimension d'entrée de la dernière couche linéaire
-    dim_feats = model.last_linear.in_features
-    # Remplacer la dernière couche par une nouvelle couche adaptée à notre problème
-    # Ici, on veut prédire 101 classes (âges de 0 à 100)
-    model.last_linear = nn.Linear(dim_feats, num_classes)
-      # Remplacer le pooling global par un pooling adaptatif
-    # Cela permet de gérer des images d'entrée de tailles différentes
-    model.avg_pool = nn.AdaptiveAvgPool2d(1)
-    return model
-"""
 
-def get_model(model_name="se_resnext50_32x4d", method=None, num_classes=101, pretrained="imagenet"):
-    use_timm = model_name.startswith("efficientnet") or model_name in timm.list_models()
-
-    if use_timm:
-        base_model = timm.create_model(model_name, pretrained=(pretrained == "imagenet"))
-        dim_feats = base_model.num_features
-        base_model.reset_classifier(0)
-
-        class TimmWrapper(nn.Module):
-          def __init__(self, backbone):
-              super().__init__()
-              self.backbone = backbone
-
-          def forward_features(self, x):
-              # timm create_model a déjà forward_features
-              return self.backbone.forward_features(x)
-
-          # ajouter un alias pour compatibilité
-          def features(self, x):
-              return self.forward_features(x)
-
-        base_model = TimmWrapper(base_model)
-
-    else:
-        base_model = pretrainedmodels.__dict__[model_name](pretrained=pretrained)
-        dim_feats = base_model.last_linear.in_features
-        base_model.avg_pool = nn.AdaptiveAvgPool2d(1)
-
-    # ===== heads =====
-    if method == "dex":
-        return nn.Sequential(
-            base_model,
-            nn.Flatten(),
-            nn.Linear(dim_feats, num_classes)
-        )
-
-    elif method == "residual":
-        return ResidualModel(base_model, dim_feats, num_classes)
-
-    elif method in ["gaussian", "laplace"]:
-        return RegressionModel(base_model, dim_feats, mode=method)
-
-    else:
-        return nn.Sequential(
-            base_model,
-            nn.Flatten(),
-            nn.Linear(dim_feats, num_classes)
-        )
+# faire get_model de maniere à utiliser efficientNet et pouvoir également utiliser les backbone resNet
     
 def get_model2(model_name="se_resnext50_32x4d", method=None, num_classes=101, pretrained="imagenet"):
     """
