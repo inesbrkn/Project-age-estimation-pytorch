@@ -11,15 +11,12 @@ from tensorboard.backend.event_processing import event_accumulator
 # ======================================================
 #  Courbes train / val pour UN modèle
 # ======================================================
-def plot_training_curves(train_losses, val_losses, train_mae=None, val_mae=None, title=None):
+def plot_training_curves(train_losses, val_losses, train_mae=None, val_mae=None, title=None, save_path=None):
     epochs = np.arange(1, len(train_losses) + 1)
-
     has_mae = train_mae is not None and val_mae is not None
     ncols = 2 if has_mae else 1
-
     plt.figure(figsize=(6 * ncols, 5))
 
-    # ----- LOSS -----
     plt.subplot(1, ncols, 1)
     plt.plot(epochs, train_losses, label="train loss")
     plt.plot(epochs, val_losses, label="val loss")
@@ -29,7 +26,6 @@ def plot_training_curves(train_losses, val_losses, train_mae=None, val_mae=None,
     plt.legend()
     plt.grid(alpha=0.3)
 
-    # ----- MAE -----
     if has_mae:
         plt.subplot(1, ncols, 2)
         plt.plot(epochs, train_mae, label="train MAE")
@@ -41,6 +37,10 @@ def plot_training_curves(train_losses, val_losses, train_mae=None, val_mae=None,
         plt.grid(alpha=0.3)
 
     plt.tight_layout()
+    
+    if save_path:  # sauvegarde sur disque
+        plt.savefig(save_path)
+        print(f"Saved figure to {save_path}")
     plt.show()
 
 

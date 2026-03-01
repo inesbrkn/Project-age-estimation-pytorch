@@ -103,7 +103,32 @@ def compute_predictions(outputs, mode, device):
         raise ValueError(f"Unknown mode: {mode}")
 
 
+"""
+def compute_predictions(outputs, mode, device):
+    
+    if mode == "dex":
+        ages = torch.arange(0, 101, device=device).float()
+        probs = F.softmax(outputs, dim=-1)
+        return (probs * ages).sum(dim=1)
 
+    elif mode == "residual":
+        cls_logits, residual = outputs
+
+        pred_class = cls_logits.argmax(1).float()
+        pred_age = pred_class + residual.squeeze(-1)
+
+        # très important
+        pred_age = pred_age.clamp(0, 100)
+
+        return pred_age
+
+    elif mode in ["gaussian", "laplace"]:
+        mu, _ = outputs
+        return mu.squeeze(-1).clamp(0, 100)
+
+    else:
+        raise ValueError(f"Unknown mode: {mode}")
+"""
 """ -- > Entraine le modèle
 
 1) Parcourt toutes les images du train_loader.
@@ -334,8 +359,9 @@ def main():
         history["val_loss"],
         history["train_mae"],
         history["val_mae"],
-        title=f"{history['name']}"
-    )   
+        title=f"{history['name']}",
+        save_path="training_curves_{args.opts}.png"
+    )
 
 if __name__ == '__main__':
     main()

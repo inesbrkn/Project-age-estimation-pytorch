@@ -2,6 +2,60 @@ import torch
 import torch.nn as nn
 from defaults import _C as cfg
 
+"""
+class ResidualLoss(nn.Module):
+    def __init__(self, alpha=0.5, labelSmoothing=0.0):
+        super().__init__()
+        self.cls_loss = nn.CrossEntropyLoss(label_smoothing=labelSmoothing)
+        self.res_loss = nn.MSELoss()
+        self.alpha = alpha
+
+    def forward(self, outputs, target):
+        cls_logits, residual = outputs
+
+        # classe entière
+        target_class = target.long()
+
+        # classification
+        loss_cls = self.cls_loss(cls_logits, target_class)
+
+        # résidu cible
+        residual_target = target.float() - target_class.float()
+
+        loss_res = self.res_loss(residual.squeeze(-1), residual_target)
+
+        return loss_cls + self.alpha * loss_res
+
+class ResidualLoss(nn.Module):
+    def __init__(self, alpha=0.5, labelSmoothing=0.0):
+        super().__init__()
+        self.cls_loss = nn.CrossEntropyLoss(label_smoothing=labelSmoothing)
+        self.res_loss = nn.MSELoss()
+        self.alpha = alpha
+
+    def forward(self, outputs, target):
+  
+        cls_logits, residual = outputs
+
+        # ---------- classification ----------
+        loss_cls = self.cls_loss(cls_logits, target)
+
+        # ---------- residual (STABLE VERSION) ----------
+        # IMPORTANT: utiliser la vraie classe, pas la prédite
+        residual_target = target.float() - target.float()
+
+        # en pratique on veut:
+        # residual_target = true_age - true_class
+        # mais ici target EST déjà la classe (0–100)
+
+        residual_target = torch.zeros_like(target, dtype=torch.float)
+
+        loss_res = self.res_loss(residual.squeeze(-1), residual_target)
+
+        return loss_cls + self.alpha * loss_res
+
+"""
+
 class ResidualLoss(nn.Module):
     def __init__(self, alpha=0.5, labelSmoothing=0.0):
         super().__init__()
