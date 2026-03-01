@@ -169,7 +169,7 @@ def run_epoch(loader,model,criterion,optimizer,epoch,device,mode,is_train,return
 
             # ===== MAE correct =====
             abs_error = (preds - y.float()).abs()
-            mae_meter.update(abs_error.mean().item(), x.size(0))
+            mae_meter.update(abs_error.sum().item(), x.size(0))
 
             # ===== accuracy ±N ans =====
             if mode in ["dex", "residual"]:
@@ -178,8 +178,8 @@ def run_epoch(loader,model,criterion,optimizer,epoch,device,mode,is_train,return
                 accN_meter.update(correct_num, x.size(0))
             else :
                 N = int(cfg.N)
-                within_N = (abs_error <= N).float()
-                accN_meter.update(within_N.mean().item(), x.size(0))
+                within_N = (abs_error <= N).sum().item()
+                accN_meter.update(within_N, x.size(0))
 
             loss_meter.update(loss.item(), x.size(0))
 
