@@ -6,7 +6,7 @@ import better_exceptions
 from pathlib import Path
 from collections import OrderedDict
 from tqdm import tqdm
-
+import os
 import torch
 import torch.nn as nn
 import torch.nn.parallel
@@ -84,26 +84,7 @@ def mae_by_age_group(preds, gt, groups=None):
         results.append({"name": f"{low}-{high}", "mae": float(mae), "count": int(n), "std": float(std)})
     return results
 
-def compute_predictions(outputs, mode, device):
-    """Extrait les âges prédits depuis les sorties du modèle."""
-    if mode == "dex":
-        ages = torch.arange(0, 101, device=device).float()
-        probs = F.softmax(outputs, dim=-1)
-        return (probs * ages).sum(dim=1)
 
-    elif mode == "residual":
-        cls_logits, residual = outputs
-        return cls_logits.argmax(1).float() + residual.squeeze(-1)
-
-    elif mode in ["gaussian", "laplace"]:
-        mu, _ = outputs
-        return mu.squeeze(-1).clamp(0, 100)
-
-    else:
-        raise ValueError(f"Unknown mode: {mode}")
-
-
-"""
 def compute_predictions(outputs, mode, device):
     
     if mode == "dex":
@@ -128,7 +109,7 @@ def compute_predictions(outputs, mode, device):
 
     else:
         raise ValueError(f"Unknown mode: {mode}")
-"""
+
 """ -- > Entraine le modèle
 
 1) Parcourt toutes les images du train_loader.
@@ -359,8 +340,8 @@ def main():
         history["val_loss"],
         history["train_mae"],
         history["val_mae"],
-        title=f"{history['name']}",
-        save_path="training_curves_{args.opts}.png"
+        title=history["name"],
+        save_path=f"Images/training_curves_Dex.png",
     )
 
 if __name__ == '__main__':

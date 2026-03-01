@@ -4,14 +4,14 @@ import seaborn as sns
 import pandas as pd
 import argparse
 from pathlib import Path
-
+import os
 from tensorboard.backend.event_processing import event_accumulator
 
 
 # ======================================================
 #  Courbes train / val pour UN modèle
 # ======================================================
-def plot_training_curves(train_losses, val_losses, train_mae=None, val_mae=None, title=None, save_path=None):
+def plot_training_curves(train_losses, val_losses, train_mae=None, val_mae=None, title=None, save_path=None, save_dir="Images"):
     epochs = np.arange(1, len(train_losses) + 1)
     has_mae = train_mae is not None and val_mae is not None
     ncols = 2 if has_mae else 1
@@ -37,7 +37,9 @@ def plot_training_curves(train_losses, val_losses, train_mae=None, val_mae=None,
         plt.grid(alpha=0.3)
 
     plt.tight_layout()
-    
+       
+    os.makedirs(save_dir, exist_ok=True)  # crée le dossier si absent
+
     if save_path:  # sauvegarde sur disque
         plt.savefig(save_path)
         print(f"Saved figure to {save_path}")
@@ -109,34 +111,98 @@ def read_scalars(log_dir, tag):
 
 
 # =========================================================
+# Superposer deux méthodes sur le même graphique
+# =========================================================
+def plot_two_methods(train_logs, val_logs, names, title=None, save_path=None):
+    """
+    train_logs, val_logs: list of paths
+    names: list of labels
+    Affiche train/val loss et MAE pour deux méthodes
+    """
+    plt.figure(figsize=(12,5))
+
+    # Loss subplot
+    plt.subplot(1,2,1)
+    for t_log, v_log, name in zip(train_logs, val_logs, names):
+        train_loss = read_scalars(t_log, "loss")
+        val_loss = read_scalars(v_log, "loss")
+        epochs = np.arange(1, len(train_loss)+1)
+        plt.plot(epochs, train_loss, linestyle="--", label=f"{name} train")
+        plt.plot(epochs, val_loss, linestyle="-", label=f"{name} val")
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.title("Loss comparison")
+    plt.legend()
+    plt.grid(alpha=0.3)
+
+    # MAE subplot
+    plt.subplot(1,2,2)
+    for t_log, v_log, name in zip(train_logs, val_logs, names):
+        train_mae = read_scalars(t_log, "mae")
+        val_mae = read_scalars(v_log, "mae")
+        epochs = np.arange(1, len(train_mae)+1)
+        plt.plot(epochs, train_mae, linestyle="--", label=f"{name} train")
+        plt.plot(epochs, val_mae, linestyle="-", label=f"{name} val")
+    plt.xlabel("Epoch")
+    plt.ylabel("MAE")
+    plt.title("MAE comparison")
+    plt.legend()
+    plt.grid(alpha=0.3)
+
+    plt.tight_layout()
+    if save_path:
+        plt.savefig(save_path)
+        print(f"Saved figure to {save_path}")
+    plt.show()
+
+
+# =========================================================
 # Main
 # =========================================================
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--logdir", type=str, required=True)
     parser.add_argument("--title", type=str, default="Training curves")
+    parser.add_argument("--compare", action="store_true", help="Comparer deux méthodes DEX vs Laplace")
     args = parser.parse_args()
 
     logdir = Path(args.logdir)
 
-    train_log = logdir / "_train"
-    val_log = logdir / "_val"
+    if args.compare:
+        # Dossiers TensorBoard pour DEX, Laplace, Gaussian
+        dex_train = logdir / "dex" / "_train"
+        dex_val   = logdir / "dex" / "_val"
+        lap_train = logdir / "laplace" / "_train"
+        lap_val   = logdir / "laplace" / "_val"
+        gaus_train = logdir / "gaussian" / "_train"
+        gaus_val   = logdir / "gaussian" / "_val"
 
-    print("Reading TensorBoard logs...")
+        plot_two_methods(   
+            train_logs=[dex_train, lap_train, gaus_train],
+            val_logs=[dex_val, lap_val, gaus_val],
+            names=["DEX", "Laplace", "Gaussian"],
+            title=args.title
+        )
 
-    train_loss = read_scalars(train_log, "loss")
-    val_loss = read_scalars(val_log, "loss")
+    else:
+        train_log = logdir / "_train"
+        val_log = logdir / "_val"
 
-    train_mae = read_scalars(train_log, "mae")
-    val_mae = read_scalars(val_log, "mae")
+        print("Reading TensorBoard logs...")
 
-    plot_training_curves(
-        train_loss,
-        val_loss,
-        train_mae,
-        val_mae,
-        title=args.title,
-    )
+        train_loss = read_scalars(train_log, "loss")
+        val_loss = read_scalars(val_log, "loss")
+
+        train_mae = read_scalars(train_log, "mae")
+        val_mae = read_scalars(val_log, "mae")
+
+        plot_training_curves(
+            train_loss,
+            val_loss,
+            train_mae,
+            val_mae,
+            title=args.title,
+        )
 
 
 if __name__ == "__main__":

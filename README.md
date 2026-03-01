@@ -100,7 +100,3 @@ After evaluation, you can see something like this:
 100%|███████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 16/16 [00:08<00:00,  1.28it/s]
 test mae: 4.800
 ```
-
-
-
-efficient net + changer traitement d'image 
