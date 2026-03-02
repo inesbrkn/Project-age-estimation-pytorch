@@ -87,11 +87,7 @@ class FaceDataset(Dataset):
         img = cv2.imread(str(img_path), 1)
         img = cv2.resize(img, (self.img_size, self.img_size))
         img = self.transform(img).astype(np.float32)
-        #----
-        # J'ai ajouté la normalisation
-        img = img / 255.0  # mettre 0-1
-        img = (img - np.array([0.485, 0.456, 0.406])) / np.array([0.229, 0.224, 0.225])
-        #----
+
         return torch.from_numpy(np.transpose(img, (2, 0, 1))), np.clip(round(age), 0, 100)
 
 
