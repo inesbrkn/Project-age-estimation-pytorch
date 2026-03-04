@@ -10,7 +10,7 @@ from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
-
+import pretrainedmodels
 from model import get_model2
 from dataset import FaceDataset
 from defaults import _C as cfg
@@ -21,19 +21,21 @@ from train import (
 )
 
 
+
+
 def get_args():
     model_names = sorted(
-        name
-        for name in torch.hub.list("Cadene/pretrained-models.pytorch", force_reload=False)
+        name for name in pretrainedmodels.__dict__
+        if not name.startswith("__")
+        and name.islower()
+        and callable(pretrainedmodels.__dict__[name])
     )
     parser = argparse.ArgumentParser(
         description=f"available models: {model_names}",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--data_dir", type=str, required=True, help="Data root directory")
-    parser.add_argument(
-        "--resume", type=str, default=None, help="Resume from checkpoint if any"
-    )
+    parser.add_argument("--resume", type=str, default=None, help="Resume from checkpoint if any")
     parser.add_argument(
         "--checkpoint",
         type=str,
@@ -57,7 +59,6 @@ def get_args():
     )
     args = parser.parse_args()
     return args
-
 
 def train_cls(train_loader, model, criterion, optimizer, epoch, device):
     """
