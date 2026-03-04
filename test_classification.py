@@ -41,13 +41,16 @@ def main():
     if args.opts:
         cfg.merge_from_list(args.opts)
 
-    # Forcer le mode classification DEX pour ce script
-    cfg.MODEL.METHOD = "dex"
+    # Mode classification (DEX ou Ordinal) pour ce script
+    method = cfg.MODEL.METHOD
+    if method not in ("dex", "ordinal"):
+        method = "dex"
+    cfg.MODEL.METHOD = method
     cfg.MODEL.TASK = "classification"
     cfg.freeze()
 
     # create model (classification)
-    print("=> creating classification model '{}' (DEX)".format(cfg.MODEL.ARCH))
+    print(f"=> creating classification model '{cfg.MODEL.ARCH}' (method={cfg.MODEL.METHOD})")
     model = get_model2(model_name=cfg.MODEL.ARCH, method=cfg.MODEL.METHOD, pretrained=None)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = model.to(device)
@@ -79,7 +82,7 @@ def main():
     print("=> start classification testing")
     criterion = None  # pas de loss en test, uniquement métriques
     _, test_acc, test_mae, preds, gt = validate_cls(
-        test_loader, model, criterion, 0, device
+        test_loader, model, criterion, 0, device, cfg.MODEL.METHOD
     )
     print(f"test accuracy (cls): {test_acc:.4f}")
     print(f"test mae (cls, global): {test_mae:.3f}")

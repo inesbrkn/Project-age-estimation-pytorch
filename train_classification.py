@@ -21,7 +21,28 @@ from train import (
 )
 
 
+class OrdinalLoss(nn.Module):
+    """
+    Loss pour la régression ordinale :
+    pour K classes (0..K-1), le modèle prédit K-1 sorties binaires \"age > k ?\".
+    On applique une BCEWithLogitsLoss sur ces sorties.
+    """
 
+    def __init__(self):
+        super().__init__()
+        self.bce = nn.BCEWithLogitsLoss()
+
+    def forward(self, logits, ages):
+        """
+        logits: [batch, K-1]
+        ages:  [batch] (âges entiers 0..K-1)
+        """
+        K_minus1 = logits.size(1)
+        K = K_minus1 + 1
+        thresholds = torch.arange(0, K - 1, device=logits.device).unsqueeze(0)  # [1, K-1]
+        ages = ages.unsqueeze(1)  # [batch, 1]
+        targets = (ages > thresholds).float()  # [batch, K-1]
+        return self.bce(logits, targets)
 
 def get_args():
     model_names = sorted(
@@ -60,10 +81,11 @@ def get_args():
     args = parser.parse_args()
     return args
 
-def train_cls(train_loader, model, criterion, optimizer, epoch, device):
+def train_cls(train_loader, model, criterion, optimizer, epoch, device, method):
     """
-    Boucle d'entraînement dédiée au problème de classification (DEX pur).
-    Le modèle renvoie directement des logits de taille [batch_size, num_classes].
+    Boucle d'entraînement dédiée au problème de classification.
+    - method = \"dex\"      : classification DEX (softmax 0-100)
+    - method = \"ordinal\" : régression ordinale (K-1 sorties binaires \"age > k ?\")
     """
     model.train()
     loss_monitor = AverageMeter()
@@ -73,10 +95,19 @@ def train_cls(train_loader, model, criterion, optimizer, epoch, device):
         x = x.to(device)
         y = y.to(device)
 
-        logits = model(x)
-        loss = criterion(logits, y)
+        outputs = model(x)
 
-        predicted = logits.argmax(1)
+        if method == "ordinal":
+            logits = outputs
+            loss = criterion(logits, y)
+            # age estimé = somme des probabilités sigmoid(logits)
+            probs = torch.sigmoid(logits)
+            age_est = probs.sum(dim=1)
+            predicted = age_est.round().clamp(0, 100).long()
+        else:  # DEX
+            logits = outputs
+            loss = criterion(logits, y)
+            predicted = logits.argmax(1)
         cur_loss = loss.item()
         correct_num = predicted.eq(y).sum().item()
         sample_num = x.size(0)
@@ -91,11 +122,13 @@ def train_cls(train_loader, model, criterion, optimizer, epoch, device):
     return loss_monitor.avg, accuracy_monitor.avg
 
 
-def validate_cls(validate_loader, model, criterion, epoch, device):
+def validate_cls(validate_loader, model, criterion, epoch, device, method):
     """
     Validation pour la classification :
-    - accuracy (top-1)
-    - MAE dérivé en années via l'espérance du softmax sur les classes 0-100.
+    - accuracy (top-1) approximative
+    - MAE dérivé en années :
+      - DEX : espérance du softmax sur les classes 0-100
+      - Ordinal : somme des probabilités sigmoid(logits) (nombre de seuils dépassés)
     """
     model.eval()
     loss_monitor = AverageMeter()
@@ -109,23 +142,33 @@ def validate_cls(validate_loader, model, criterion, epoch, device):
             x = x.to(device)
             y = y.to(device)
 
-            logits = model(x)
-            predicted = logits.argmax(1)
+            outputs = model(x)
 
-            probs = F.softmax(logits, dim=-1)
-            ages = torch.arange(0, 101).to(device)
-            expected_age = (probs * ages).sum(dim=1)
+            if method == "ordinal":
+                logits = outputs
+                probs = torch.sigmoid(logits)
+                expected_age = probs.sum(dim=1)
+                if criterion is not None:
+                    loss = criterion(logits, y)
+                    predicted = expected_age.round().clamp(0, 100).long()
+                    correct_num = predicted.eq(y).sum().item()
+                    sample_num = x.size(0)
+                    loss_monitor.update(loss.item(), sample_num)
+                    accuracy_monitor.update(correct_num, sample_num)
+            else:  # DEX
+                logits = outputs
+                predicted = logits.argmax(1)
+                probs = F.softmax(logits, dim=-1)
+                ages = torch.arange(0, 101).to(device)
+                expected_age = (probs * ages).sum(dim=1)
+                if criterion is not None:
+                    loss = criterion(logits, y)
+                    correct_num = predicted.eq(y).sum().item()
+                    sample_num = x.size(0)
+                    loss_monitor.update(loss.item(), sample_num)
+                    accuracy_monitor.update(correct_num, sample_num)
 
             preds.append(expected_age.cpu().numpy())
-
-            if criterion is not None:
-                loss = criterion(logits, y)
-                correct_num = predicted.eq(y).sum().item()
-                sample_num = x.size(0)
-
-                loss_monitor.update(loss.item(), sample_num)
-                accuracy_monitor.update(correct_num, sample_num)
-
             gt.append(y.cpu().numpy())
 
     preds = np.concatenate(preds)
@@ -141,8 +184,11 @@ def main():
     if args.opts:
         cfg.merge_from_list(args.opts)
 
-    # Mode classification explicite : on fixe la méthode à DEX
-    cfg.MODEL.METHOD = "dex"
+    # Mode classification explicite : DEX ou Ordinal selon MODEL.METHOD
+    method = cfg.MODEL.METHOD
+    if method not in ("dex", "ordinal"):
+        method = "dex"
+    cfg.MODEL.METHOD = method
     cfg.MODEL.TASK = "classification"
     cfg.freeze()
 
@@ -151,8 +197,8 @@ def main():
     checkpoint_dir = Path(args.checkpoint)
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-    # create model (classification DEX : logits 0-100)
-    print("=> creating classification model '{}' (DEX)".format(cfg.MODEL.ARCH))
+    # create model (classification : DEX logits 0-100 ou Ordinal K-1 sorties)
+    print(f"=> creating classification model '{cfg.MODEL.ARCH}' (method={cfg.MODEL.METHOD})")
     model = get_model2(model_name=cfg.MODEL.ARCH, method=cfg.MODEL.METHOD)
 
     # choisi l'optimizer
@@ -202,9 +248,12 @@ def main():
     if device == "cuda":
         cudnn.benchmark = True
 
-    criterion = nn.CrossEntropyLoss(label_smoothing=cfg.MODEL.LABEL_SMOOTHING).to(
-        device
-    )
+    if cfg.MODEL.METHOD == "ordinal":
+        criterion = OrdinalLoss().to(device)
+    else:
+        criterion = nn.CrossEntropyLoss(label_smoothing=cfg.MODEL.LABEL_SMOOTHING).to(
+            device
+        )
 
     train_dataset = FaceDataset(
         args.data_dir,
@@ -259,12 +308,12 @@ def main():
     for epoch in range(start_epoch, cfg.TRAIN.EPOCHS):
         # train
         train_loss, train_acc = train_cls(
-            train_loader, model, criterion, optimizer, epoch, device
+            train_loader, model, criterion, optimizer, epoch, device, cfg.MODEL.METHOD
         )
 
         # validate
         val_loss, val_acc, val_mae, _, _ = validate_cls(
-            val_loader, model, criterion, epoch, device
+            val_loader, model, criterion, epoch, device, cfg.MODEL.METHOD
         )
 
         if args.tensorboard is not None:

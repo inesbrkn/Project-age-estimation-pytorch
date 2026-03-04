@@ -50,6 +50,7 @@ def get_model2(model_name="se_resnext50_32x4d", method=None, num_classes=101, pr
     Retourne un modèle adapté à la méthode choisie :
       - method="dex" : DEX (softmax sur 101 classes)
       - method="residual" : Residual Method
+      - method="ordinal" : Ordinal Regression (K-1 sorties binaires \"age > k ?\")
       - method=None ou "" : modèle classique (dernier layer linéaire = num_classes)
     """
     base_model = pretrainedmodels.__dict__[model_name](pretrained=pretrained)
@@ -58,6 +59,12 @@ def get_model2(model_name="se_resnext50_32x4d", method=None, num_classes=101, pr
 
     if method == "dex":
         base_model.last_linear = nn.Linear(dim_feats, num_classes)
+        return base_model
+
+    elif method == "ordinal":
+        # Ordinal regression : pour K classes (0..K-1), on prédit K-1 sorties binaires \"age > k ?\"
+        num_thresholds = num_classes - 1
+        base_model.last_linear = nn.Linear(dim_feats, num_thresholds)
         return base_model
 
     elif method == "residual":
