@@ -85,6 +85,40 @@ python train.py --data_dir [PATH/TO/appa-real-release] --tensorboard tf_log MODE
 All default parameters defined in [defaults.py](defaults.py) can be changed using this style.
 
 
+### Classification variant (101 age classes, DEX-style)
+
+In addition to the regression/residual setup, you can explicitly treat age estimation as a **pure classification** problem
+with 101 classes (ages 0–100), while still reporting MAE in years using the expectation over the softmax.
+
+#### Train classification model
+
+```bash
+python train_classification.py \
+  --data_dir [PATH/TO/appa-real-release] \
+  --tensorboard tf_log_cls \
+  --checkpoint checkpoint_cls \
+  MODEL.ARCH se_resnext50_32x4d \
+  MODEL.LABEL_SMOOTHING 0.1
+```
+
+This uses:
+- **CrossEntropyLoss** (optionally with label smoothing) on 101 age classes.
+- Metrics: **accuracy** (top‑1) and **MAE** derived from the expected age computed from the softmax.
+
+#### Test classification model
+
+```bash
+python test_classification.py \
+  --data_dir [PATH/TO/appa-real-release] \
+  --resume [PATH/TO/checkpoint_cls/best_cls.pth]
+```
+
+This script reports:
+- global **test accuracy**,
+- global **test MAE** in years,
+- and optional **MAE by age groups** (children / adults / seniors) based on `TEST.AGE_GROUPS` in `defaults.py`.
+
+
 #### Test Trained Model
 Evaluate the trained model using the APPA-REAL test dataset.
 
