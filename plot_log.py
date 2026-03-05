@@ -120,40 +120,42 @@ def plot_two_methods(train_logs, val_logs, names, title=None, save_path=None):
     Affiche train/val loss et MAE pour deux méthodes
     """
     plt.figure(figsize=(12,5))
-    ea = event_accumulator.EventAccumulator("tf_log/dex_train")
+
+    from tensorboard.backend.event_processing import event_accumulator
+
+    ea = event_accumulator.EventAccumulator("tf_log/MODEL.METHOD_none_val")
     ea.Reload()
     print(ea.Tags()["scalars"])
     # Loss subplot
     plt.subplot(1,2,1)
-    for t_log,  name in zip(train_logs, names):
-        train_loss = read_scalars(t_log, "loss")
-        #val_loss = read_scalars(v_log, "loss")
-        epochs = np.arange(1, len(train_loss)+1)
-        plt.plot(epochs, train_loss, linestyle="--", label=f"{name} train")
-        #plt.plot(epochs, val_loss, linestyle="-", label=f"{name} val")
+    for t_log,v_log,  name in zip(train_logs,val_logs, names):
+        # train_loss = read_scalars(t_log, "loss")
+        val_loss = read_scalars(v_log, "loss")
+        epochs = np.arange(1, len(val_loss)+1)
+        # plt.plot(epochs, train_loss, linestyle="--", label=f"{name} train")
+        plt.plot(epochs, val_loss, linestyle="-", label=f"{name} val")
     plt.xlabel("Epoch")
     plt.ylabel("Loss")
     plt.title("Loss comparison")
     plt.legend()
     plt.grid(alpha=0.3)
 
-    # MAE subplot
-    """
+    # Acc subplot
     plt.subplot(1,2,2)
     for t_log, v_log, name in zip(train_logs, val_logs, names):
-        train_mae = read_scalars(t_log, "mae")
-        val_mae = read_scalars(v_log, "mae")
-        epochs = np.arange(1, len(train_mae)+1)
-        plt.plot(epochs, train_mae, linestyle="--", label=f"{name} train")
-        plt.plot(epochs, val_mae, linestyle="-", label=f"{name} val")
+        #train_acc = read_scalars(t_log, "acc")
+        val_acc = read_scalars(v_log, "acc")
+        epochs = np.arange(1, len(val_acc)+1)
+        #plt.plot(epochs, train_acc, linestyle="--", label=f"{name} train")
+        plt.plot(epochs, val_acc, linestyle="-", label=f"{name} val")
     plt.xlabel("Epoch")
-    plt.ylabel("MAE")
-    plt.title("MAE comparison")
+    plt.ylabel("ACCURACY")
+    plt.title("ACCURACY comparison")
     plt.legend()
     plt.grid(alpha=0.3)
 
     plt.tight_layout()
-    """
+    
     if save_path:
         plt.savefig(save_path)
         print(f"Saved figure to {save_path}")
@@ -173,23 +175,48 @@ def main():
     logdir = Path(args.logdir)
 
     if args.compare:
+        """
         # Dossiers TensorBoard pour DEX, Laplace, Gaussian
-        dex_train = logdir / "dex_train"
-        dex_val   = logdir / "dex_val"
+        dex_train = logdir / "MODEL.METHOD_dex_train"
+        dex_val   = logdir / "MODEL.METHOD_dex_val"
 
         lap_train = logdir / "MODEL.METHOD_laplace_train"
         lap_val   = logdir / "MODEL.METHOD_laplace_val"
 
         gaus_train = logdir / "MODEL.METHOD_gaussian_train"
         gaus_val   = logdir / "MODEL.METHOD_gaussian_val"
-
+        
+        none_train = logdir / "MODEL.METHOD_none_MODEL.LABEL_SMOOTHING_0.1_DROPOUT_True_train"
+        none_val   = logdir / "MODEL.METHOD_none_MODEL.LABEL_SMOOTHING_0.1_DROPOUT_True_val"
+        
         plot_two_methods(   
-            train_logs=[dex_train, lap_train, gaus_train],
-            val_logs=[dex_val, lap_val, gaus_val],
-            names=["DEX", "Laplace", "Gaussian"],
+            train_logs=[dex_train, lap_train, gaus_train, none_train],
+            val_logs=[dex_val, lap_val, gaus_val, none_val],
+            names=["DEX", "Laplace", "Gaussian", "None"],
             title=args.title
         )
+        """
+        resnet_train = logdir / "MODEL.METHOD_laplace_train"
+        resnet_val   = logdir / "MODEL.METHOD_laplace_val"
 
+        resnet50_train = logdir / "MODEL.METHOD_laplace_MODEL.ARCH_se_resnet50_train"
+        resnet50_val   = logdir / "MODEL.METHOD_laplace_MODEL.ARCH_se_resnet50_val"
+
+        resnet101_train = logdir / "MODEL.METHOD_laplace_MODEL.ARCH_resnet101_train"
+        resnet101_val   = logdir / "MODEL.METHOD_laplace_MODEL.ARCH_resnet101_val"
+
+        efficient_b0_train = logdir / "MODEL.METHOD_laplace_MODEL.ARCH_efficientnet_b0_train"
+        efficient_b0_val   = logdir / "MODEL.METHOD_laplace_MODEL.ARCH_efficientnet_b0_val"
+        
+        efficient_b3_train = logdir / "MODEL.METHOD_laplace_MODEL.ARCH_efficientnet_b3_train"
+        efficient_b3__val   = logdir / "MODEL.METHOD_laplace_MODEL.ARCH_efficientnet_b3_val"
+
+        plot_two_methods(   
+            train_logs=[resnet_train, resnet50_train,resnet101_train,efficient_b0_train,efficient_b3_train],
+            val_logs=[resnet_val,resnet50_val,resnet101_val,efficient_b0_val,efficient_b3__val ],
+            names=["se_resnext50_32x4d","ResNet50", "ResNet101", "Efficient_b0", "Efficient_b3"],
+            title="Comparaison des backbones sur le model utilisant LaplaceLoss"
+        )    
     else:
         train_log = logdir / "_train"
         val_log = logdir / "_val"

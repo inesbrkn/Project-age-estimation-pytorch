@@ -205,10 +205,7 @@ def main():
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = model.to(device)
-
-    # ----- Reprise depuis un checkpoint (--resume) -----
-    # On charge AVANT d'envelopper le modèle avec DataParallel, pour pouvoir utiliser
-    # _load_state_dict_into_model et accepter un checkpoint sauvegardé avec ou sans DataParallel.
+# ----- Reprise depuis un checkpoint (--resume) -----
     resume_path = args.resume
     checkpoint = None
 
@@ -238,6 +235,7 @@ def main():
 
     if device == "cuda":
         cudnn.benchmark = True
+
 
     # choix de la methode de calcul de la loss, modifier la méthode ds defaults.py
     criterion = get_criterion(cfg.MODEL.METHOD, alpha=0.5, device=device)
