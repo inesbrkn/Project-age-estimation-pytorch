@@ -50,7 +50,6 @@ class ResidualLoss(nn.Module):
 
         return loss_cls + self.alpha * loss_res
 
-"""
 
 class ResidualLoss(nn.Module):
     def __init__(self, alpha=0.5, labelSmoothing=0.0):
@@ -75,7 +74,35 @@ class ResidualLoss(nn.Module):
 
         return loss_cls + self.alpha * loss_res
 
+"""
 
+class ResidualLoss(nn.Module):
+    def __init__(self, alpha=0.5, label_smoothing=0.0):
+        super().__init__()
+        self.cls_loss = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
+        self.res_loss = nn.MSELoss()
+        self.alpha = alpha
+
+    def forward(self, outputs, target):
+        """
+        outputs = (cls_logits, residual)
+        target = true age (LongTensor)
+        """
+
+        cls_logits, residual = outputs
+
+        # classification loss
+        loss_cls = self.cls_loss(cls_logits, target)
+
+        # predicted class
+        pred_class = cls_logits.argmax(dim=1)
+
+        # residual target
+        residual_target = target.float() - pred_class.float()
+
+        loss_res = self.res_loss(residual, residual_target)
+
+        return loss_cls + self.alpha * loss_res
 
 class GaussianLikelihoodLoss(nn.Module):
     def __init__(self):

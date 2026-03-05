@@ -93,16 +93,22 @@ def compute_predictions(outputs, mode, device):
         return (probs * ages).sum(dim=1)
 
     elif mode == "residual":
+
         cls_logits, residual = outputs
 
-        pred_class = cls_logits.argmax(1).float()
-        pred_age = pred_class + residual.squeeze(-1)
+        #ages = torch.arange(0,101, device=device).float()
+        #probs = F.softmax(cls_logits, dim=1)
 
-        # très important
-        pred_age = pred_age.clamp(0, 100)
+        #soft_class = (probs * ages).sum(dim=1)
+
+        #pred_age = soft_class + residual.squeeze(-1)
+
+        #pred_age = pred_age.clamp(0,100)
+        predicted = cls_logits.argmax(1)
+        pred_age = predicted.float() + residual.squeeze()
 
         return pred_age
-
+    
     elif mode in ["gaussian", "laplace"]:
         mu, _ = outputs
         return mu.squeeze(-1).clamp(0, 100)
@@ -127,8 +133,8 @@ def run_epoch(loader,model,criterion,optimizer,epoch,device,mode,is_train,return
 
     with ctx, tqdm(loader) as _tqdm:
         for x, y in _tqdm:
-            x = x.to(device, non_blocking=True)
-            y = y.to(device, non_blocking=True)
+            x = x.to(device)
+            y = y.to(device)
 
             outputs = model(x)
             loss = criterion(outputs, y)
@@ -158,7 +164,7 @@ def run_epoch(loader,model,criterion,optimizer,epoch,device,mode,is_train,return
 
             # ===== backward =====
             if is_train:
-                optimizer.zero_grad(set_to_none=True)
+                optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
 
@@ -209,33 +215,33 @@ def main():
     resume_path = args.resume
     checkpoint = None
 
+ 
     if resume_path:
         if Path(resume_path).is_file():
-            print(f"=> loading checkpoint '{resume_path}'")
+            print("=> loading checkpoint '{}'".format(resume_path))
             checkpoint = torch.load(resume_path, map_location="cpu")
-
-            start_epoch = checkpoint["epoch"]
-
-            # load robuste
-            u._load_state_dict_into_model(model, checkpoint["state_dict"])
-
-            if "optimizer_state_dict" in checkpoint:
-                optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-
-            best_val_mae = checkpoint.get("best_val_mae", 10000.0)
-
-            print(f"=> loaded checkpoint '{resume_path}' (epoch {start_epoch})")
+            start_epoch = checkpoint['epoch']  # prochain epoch à exécuter
+            u._load_state_dict_into_model(model, checkpoint['state_dict'])  # gère le préfixe "module." si besoin
+            print("=> loaded checkpoint '{}' (epoch {})"
+                  .format(resume_path, checkpoint['epoch']))
+            if 'optimizer_state_dict' in checkpoint:
+                optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            # Restaurer best_val_mae évite d'écraser best.pth avec un modèle moins bon après reprise
+            if 'best_val_mae' in checkpoint:
+                best_val_mae = checkpoint['best_val_mae']
+            else:
+                best_val_mae = 10000.0
         else:
-            print(f"=> no checkpoint found at '{resume_path}'")
+            print("=> no checkpoint found at '{}'".format(resume_path))
             best_val_mae = 10000.0
     else:
-        best_val_mae = 10000.0    
+        best_val_mae = 10000.0
+
     if args.multi_gpu:
         model = nn.DataParallel(model)
 
     if device == "cuda":
         cudnn.benchmark = True
-
 
     # choix de la methode de calcul de la loss, modifier la méthode ds defaults.py
     criterion = get_criterion(cfg.MODEL.METHOD, alpha=0.5, device=device)
@@ -252,6 +258,16 @@ def main():
     # Pour que le learning rate diminue pendant l'entrainement
     scheduler = StepLR(optimizer, step_size=cfg.TRAIN.LR_DECAY_STEP, gamma=cfg.TRAIN.LR_DECAY_RATE,
                        last_epoch=start_epoch - 1)
+    
+    if checkpoint is not None and 'scheduler_state_dict' in checkpoint:
+        scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        print("=> loaded scheduler state from checkpoint")
+    
+    if args.tensorboard is not None:
+        opts_prefix = "_".join(args.opts)
+        train_writer = SummaryWriter(log_dir=args.tensorboard + "/" + opts_prefix + "_train")
+        val_writer = SummaryWriter(log_dir=args.tensorboard + "/" + opts_prefix + "_val")
+
     best_val_mae = 10000.0
     train_writer = None
     history = {
@@ -263,12 +279,6 @@ def main():
         "train_acc": [],
         "val_acc": [],
     }
-    if args.tensorboard is not None:
-        opts_prefix = "_".join(args.opts)
-        train_writer = SummaryWriter(log_dir=args.tensorboard + "/" + opts_prefix + "_train")
-        val_writer = SummaryWriter(log_dir=args.tensorboard + "/" + opts_prefix + "_val")
-
-    
 
     for epoch in range(start_epoch, cfg.TRAIN.EPOCHS):
         train_loss, train_mae , train_acc= run_epoch(train_loader, model, criterion, optimizer, epoch, device, mode=cfg.MODEL.METHOD, is_train=True)
@@ -288,11 +298,12 @@ def main():
         history["val_mae"].append(val_mae)
         history["train_acc"].append(train_acc)
         history["val_acc"].append(val_acc)
-        # checkpoint
-        if val_mae < best_val_mae:
-            print(f"=> [epoch {epoch:03d}] best val mae was improved from {best_val_mae:.3f} to {val_mae:.3f}")
-            model_state_dict = model.module.state_dict() if args.multi_gpu else model.state_dict()
-            torch.save(
+
+        # adjust learning rate
+        scheduler.step()
+
+        model_state_dict = model.module.state_dict() if args.multi_gpu else model.state_dict()
+        torch.save(
                 {
                     'epoch': epoch + 1,
                     'arch': cfg.MODEL.ARCH,
@@ -302,14 +313,17 @@ def main():
                     'best_val_mae': val_mae,
                 },
 
-                str(checkpoint_dir.joinpath("epoch{:03d}_{:.5f}_{:.4f}_{:.5f}.pth".format(epoch, val_loss, val_mae, val_acc)))
-            )
+                str(checkpoint_dir / "last.pth")
+        )
+        
+        # checkpoint
+        if val_mae < best_val_mae:
+            print(f"=> [epoch {epoch:03d}] best val mae was improved from {best_val_mae:.3f} to {val_mae:.3f}")
             best_val_mae = val_mae
         else:
             print(f"=> [epoch {epoch:03d}] best val mae was not improved from {best_val_mae:.3f} ({val_mae:.3f})")
 
-        # adjust learning rate
-        scheduler.step()
+        
 
     print("=> training finished")
     print(f"additional opts: {args.opts}")
