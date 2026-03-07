@@ -11,6 +11,7 @@ _C.MODEL.IMG_SIZE = 224
 _C.MODEL.METHOD = "laplace"  # "dex" ou "residual" pour comparer les deux (même config recommandée)
 _C.MODEL.LABEL_SMOOTHING = 0.  # 0.1 souvent bénéfique pour la généralisation (classification)
 _C.DROPOUT = False
+_C.TEST.NC_DROPOUT= True
 _C.CLASSIFIER = False # true si on veut que les valeurs prédites sont une classe d'age false si on veut un age continu
 # Train
 _C.TRAIN = CN()
@@ -25,7 +26,7 @@ _C.TRAIN.WEIGHT_DECAY = 0.0
 _C.TRAIN.BATCH_SIZE = 80
 _C.TRAIN.EPOCHS = 60
 _C.TRAIN.AGE_STDDEV = 1.0
-_C.N = 0 # pour dire on veut que la prédiction vaut true si elle se situe dans un intervalle +- N de la vraie valeur
+_C.N = 1 # pour dire on veut que la prédiction vaut true si elle se situe dans un intervalle +- N de la vraie valeur
 # Test
 _C.TEST = CN()
 _C.TEST.WORKERS = 8

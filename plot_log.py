@@ -162,6 +162,50 @@ def plot_two_methods(train_logs, val_logs, names, title=None, save_path=None):
     plt.show()
 
 
+import numpy as np
+import matplotlib.pyplot as plt
+
+def plot_uncertainty(predictions, targets, std_values):
+    """
+    Affiche des plots pour analyser l'incertitude MC Dropout.
+
+    Parameters
+    ----------
+    predictions : array-like
+        Moyenne des prédictions (MC mean)
+    targets : array-like
+        Vraies valeurs (ex: vrai âge)
+    std_values : array-like
+        Ecart-type des prédictions (MC std)
+    """
+
+    predictions = np.array(predictions)
+    targets = np.array(targets)
+    std_values = np.array(std_values)
+
+    errors = np.abs(predictions - targets)
+
+    # Histogramme des incertitudes
+    plt.figure()
+    plt.hist(std_values, bins=30)
+    plt.xlabel("Prediction uncertainty (std)")
+    plt.ylabel("Frequency")
+    plt.title("Distribution of MC Dropout Uncertainty")
+    plt.show()
+
+    # Scatter : incertitude vs erreur
+    plt.figure()
+    plt.scatter(std_values, errors, alpha=0.4)
+    plt.xlabel("Prediction uncertainty (std)")
+    plt.ylabel("Absolute Error")
+    plt.title("Uncertainty vs Prediction Error")
+    plt.show()
+
+    # Corrélation
+    corr = np.corrcoef(std_values, errors)[0,1]
+    print("Correlation between uncertainty and error:", corr)
+
+    
 # =========================================================
 # Main
 # =========================================================

@@ -19,7 +19,7 @@ import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 import pretrainedmodels
 import pretrainedmodels.utils
-from model import get_model2
+from model import get_model2, mc_dropout_predict
 from losses import get_criterion
 from dataset import FaceDataset
 from defaults import _C as cfg
@@ -127,6 +127,7 @@ def run_epoch(loader,model,criterion,optimizer,epoch,device,mode,is_train,return
 
     all_preds = []
     all_gt = []
+    all_std = []
 
     ctx = torch.enable_grad() if is_train else torch.no_grad()
     stage = "train" if is_train else "val"
@@ -136,11 +137,27 @@ def run_epoch(loader,model,criterion,optimizer,epoch,device,mode,is_train,return
             x = x.to(device)
             y = y.to(device)
 
-            outputs = model(x)
-            loss = criterion(outputs, y)
 
-            preds = compute_predictions(outputs, mode, device)
+            if not is_train and cfg.TEST.MC_DROPOUT:
 
+                # MC Dropout prediction
+                mean_pred, std_pred = mc_dropout_predict(model, x, n_samples=30)
+
+                preds = mean_pred
+
+                # calcul outputs pour la loss normale
+                outputs = model(x)
+                loss = criterion(outputs, y)
+                # je récupère l'écart type 
+                all_std.append(std_pred.detach().cpu())
+            else:
+
+                outputs = model(x)
+                loss = criterion(outputs, y)
+
+                preds = compute_predictions(outputs, mode, device)
+            
+            
             # ===== MAE correct =====
             abs_error = (preds - y.float()).abs()
             mae_meter.update(abs_error.sum().item(), x.size(0))
@@ -177,6 +194,12 @@ def run_epoch(loader,model,criterion,optimizer,epoch,device,mode,is_train,return
                     accN=f"{accN_meter.avg:.4f}",
                 )
             )
+
+    if cfg.TEST.MC_DROPOUT:
+        all_preds = torch.cat(all_preds).numpy()
+        all_gt = torch.cat(all_gt).numpy()
+        all_std = torch.cat(all_std).numpy()
+        return loss_meter.avg, mae_meter.avg, accN_meter.avg, all_preds, all_gt, all_std
 
     if return_preds:
         all_preds = torch.cat(all_preds).numpy()
@@ -293,6 +316,7 @@ def main():
             val_writer.add_scalar("loss", val_loss, epoch)
             val_writer.add_scalar("acc", val_acc, epoch)
             val_writer.add_scalar("mae", val_mae, epoch)
+
         # ===== save history =====
         history["train_loss"].append(train_loss)
         history["val_loss"].append(val_loss)

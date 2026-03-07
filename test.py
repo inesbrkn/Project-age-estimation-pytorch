@@ -1,6 +1,7 @@
 import argparse
 import better_exceptions
 from pathlib import Path
+from plot_log import plot_uncertainty
 import torch
 import torch.nn.parallel
 import torch.backends.cudnn as cudnn
@@ -66,17 +67,12 @@ def main():
 
     criterion = get_criterion(cfg.MODEL.METHOD, alpha=0.5, device=device)
     print("=> start testing")
-    test_loss, test_mae, test_acc, preds, gt = run_epoch(
-    test_loader,
-    model,
-    criterion,
-    None,
-    0,
-    device,
-    mode=cfg.MODEL.METHOD,
-    is_train=False,
-    return_preds=True,  # ici pour dire de calculer preds et gt
-    )    
+    if cfg.TEST.MC_DROPOUT:
+        test_loss, test_mae , test_acc, gt, preds, std= run_epoch(test_loader, model, criterion, None, 0, device, mode=cfg.MODEL.METHOD, is_train=False)
+        plot_uncertainty(preds, gt, std)
+    else :
+        test_loss, test_mae, test_acc, preds, gt = run_epoch(test_loader,model,criterion,None,0,device,mode=cfg.MODEL.METHOD,is_train=False)    
+    
     print(f"test loss: {test_loss:.3f}")
     print(f"test mae: {test_mae:.3f}")
     print(f"test acc: {test_acc:.3f}")

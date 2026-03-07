@@ -77,7 +77,7 @@ class ResidualLoss(nn.Module):
 """
 
 class ResidualLoss(nn.Module):
-    def __init__(self, alpha=0.5, label_smoothing=0.0):
+    def __init__(self, alpha=0.2, label_smoothing=0.0):
         super().__init__()
         self.cls_loss = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
         self.res_loss = nn.MSELoss()
