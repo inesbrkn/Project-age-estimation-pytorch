@@ -263,13 +263,15 @@ def main():
         scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
         print("=> loaded scheduler state from checkpoint")
     
+    train_writer = None
+    
     if args.tensorboard is not None:
         opts_prefix = "_".join(args.opts)
         train_writer = SummaryWriter(log_dir=args.tensorboard + "/" + opts_prefix + "_train")
         val_writer = SummaryWriter(log_dir=args.tensorboard + "/" + opts_prefix + "_val")
 
     best_val_mae = 10000.0
-    train_writer = None
+    
     history = {
         "name": f"{cfg.MODEL.ARCH}-{cfg.MODEL.METHOD}",
         "train_loss": [],
