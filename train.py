@@ -19,12 +19,12 @@ import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 import pretrainedmodels
 import pretrainedmodels.utils
-from model import get_model2, mc_dropout_predict
+from model import get_model2, mc_dropout_predict, compute_predictions, tta_predict, tta_predict2
 from losses import get_criterion
 from dataset import FaceDataset
 from defaults import _C as cfg
 import utils as u
-from plot_log import plot_training_curves
+from plot_log import plot_training_curves, plot_uncertainty_by_age
 
 
 def get_args():
@@ -85,38 +85,6 @@ def mae_by_age_group(preds, gt, groups=None):
     return results
 
 
-def compute_predictions(outputs, mode, device):
-    
-    if mode == "dex":
-        ages = torch.arange(0, 101, device=device).float()
-        probs = F.softmax(outputs, dim=-1)
-        return (probs * ages).sum(dim=1)
-
-    elif mode == "residual":
-
-        cls_logits, residual = outputs
-
-        #ages = torch.arange(0,101, device=device).float()
-        #probs = F.softmax(cls_logits, dim=1)
-
-        #soft_class = (probs * ages).sum(dim=1)
-
-        #pred_age = soft_class + residual.squeeze(-1)
-
-        #pred_age = pred_age.clamp(0,100)
-        predicted = cls_logits.argmax(1)
-        pred_age = predicted.float() + residual.squeeze()
-
-        return pred_age
-    
-    elif mode in ["gaussian", "laplace"]:
-        mu, _ = outputs
-        return mu.squeeze(-1).clamp(0, 100)
-    elif  mode == "none" : 
-        return outputs.argmax(1).float()
-    else:
-        raise ValueError(f"Unknown mode: {mode}")
-
 
 def run_epoch(loader,model,criterion,optimizer,epoch,device,mode,is_train,return_preds=False):
     model.train() if is_train else model.eval()
@@ -134,26 +102,37 @@ def run_epoch(loader,model,criterion,optimizer,epoch,device,mode,is_train,return
 
     with ctx, tqdm(loader) as _tqdm:
         for x, y in _tqdm:
-            x = x.to(device)
-            y = y.to(device)
+            x = x.to(device, non_blocking=True)
+            y = y.to(device, non_blocking=True)
 
+             # calcul outputs pour la loss normale
+            outputs = model(x)
+            loss = criterion(outputs, y)
 
-            if not is_train and cfg.TEST.MC_DROPOUT:
+            if not is_train and ( cfg.TTA > 0) : 
+                if cfg.TTA == 1 :
+                    # MC Dropout prediction
+                    mean_pred, std_pred = tta_predict(model, x,mode, device)
+
+                    preds = mean_pred
+                    # je récupère l'écart type 
+                    all_std.append(std_pred.detach().cpu())
+                else :
+                    # MC Dropout prediction
+                    mean_pred, std_pred = tta_predict2(model, x,mode, device)
+                    preds = mean_pred
+                    # je récupère l'écart type 
+                    all_std.append(std_pred.detach().cpu())
+
+            elif not is_train and cfg.MC_DROPOUT:
 
                 # MC Dropout prediction
-                mean_pred, std_pred = mc_dropout_predict(model, x, n_samples=30)
+                mean_pred, std_pred = mc_dropout_predict(model, x,mode, device, n_samples=30)
 
                 preds = mean_pred
-
-                # calcul outputs pour la loss normale
-                outputs = model(x)
-                loss = criterion(outputs, y)
                 # je récupère l'écart type 
                 all_std.append(std_pred.detach().cpu())
             else:
-
-                outputs = model(x)
-                loss = criterion(outputs, y)
 
                 preds = compute_predictions(outputs, mode, device)
             
@@ -175,13 +154,13 @@ def run_epoch(loader,model,criterion,optimizer,epoch,device,mode,is_train,return
             loss_meter.update(loss.item(), x.size(0))
 
             # ===== stockage optionnel =====
-            if return_preds:
+            if return_preds or cfg.MC_DROPOUT or cfg.TTA >0:
                 all_preds.append(preds.detach().cpu())
                 all_gt.append(y.detach().cpu())
 
             # ===== backward =====
             if is_train:
-                optimizer.zero_grad()
+                optimizer.zero_grad(set_to_none=True)
                 loss.backward()
                 optimizer.step()
 
@@ -195,7 +174,7 @@ def run_epoch(loader,model,criterion,optimizer,epoch,device,mode,is_train,return
                 )
             )
 
-    if cfg.TEST.MC_DROPOUT:
+    if not is_train and (cfg.MC_DROPOUT or cfg.TTA > 0):
         all_preds = torch.cat(all_preds).numpy()
         all_gt = torch.cat(all_gt).numpy()
         all_std = torch.cat(all_std).numpy()
@@ -207,6 +186,26 @@ def run_epoch(loader,model,criterion,optimizer,epoch,device,mode,is_train,return
         return loss_meter.avg, mae_meter.avg, accN_meter.avg, all_preds, all_gt
 
     return loss_meter.avg, mae_meter.avg, accN_meter.avg
+
+from torch.utils.data import WeightedRandomSampler
+
+def build_sampler(dataset):
+
+    ages = dataset.ages
+
+    counts = torch.bincount(torch.tensor(ages), minlength=101)
+
+    weights = 1.0 / counts
+
+    sample_weights = weights[ages]
+
+    sampler = WeightedRandomSampler(
+        sample_weights,
+        num_samples=len(sample_weights),
+        replacement=True
+    )
+
+    return sampler
 
 def main():
     args = get_args()
@@ -271,12 +270,26 @@ def main():
 
     train_dataset = FaceDataset(args.data_dir, "train", img_size=cfg.MODEL.IMG_SIZE, augment=True,
                                 age_stddev=cfg.TRAIN.AGE_STDDEV)
-    train_loader = DataLoader(train_dataset, batch_size=cfg.TRAIN.BATCH_SIZE, shuffle=True,
-                              num_workers=cfg.TRAIN.WORKERS, drop_last=True)
+    
+    if cfg.MODEL.balanced_sampler :
+
+        sampler = build_sampler(train_dataset)
+
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=cfg.TRAIN.BATCH_SIZE,
+            sampler=sampler,
+            shuffle=True,
+            num_workers=cfg.TRAIN.WORKERS, drop_last=True,pin_memory=True
+        )
+
+    else:
+        train_loader = DataLoader(train_dataset, batch_size=cfg.TRAIN.BATCH_SIZE, shuffle=True,
+                              num_workers=cfg.TRAIN.WORKERS, drop_last=True,pin_memory=True)
 
     val_dataset = FaceDataset(args.data_dir, "valid", img_size=cfg.MODEL.IMG_SIZE, augment=False)
     val_loader = DataLoader(val_dataset, batch_size=cfg.TEST.BATCH_SIZE, shuffle=False,
-                            num_workers=cfg.TRAIN.WORKERS, drop_last=False)
+                            num_workers=cfg.TRAIN.WORKERS, drop_last=False, pin_memory=True)
 
     # Pour que le learning rate diminue pendant l'entrainement
     scheduler = StepLR(optimizer, step_size=cfg.TRAIN.LR_DECAY_STEP, gamma=cfg.TRAIN.LR_DECAY_RATE,
@@ -307,8 +320,10 @@ def main():
 
     for epoch in range(start_epoch, cfg.TRAIN.EPOCHS):
         train_loss, train_mae , train_acc= run_epoch(train_loader, model, criterion, optimizer, epoch, device, mode=cfg.MODEL.METHOD, is_train=True)
-        val_loss, val_mae, val_acc = run_epoch(val_loader, model, criterion, None, epoch, device, mode=cfg.MODEL.METHOD, is_train=False)
+        val_loss, val_mae, val_acc,preds,gt,std = run_epoch(val_loader, model, criterion, None, epoch, device, mode=cfg.MODEL.METHOD, is_train=False)
 
+
+        
         if args.tensorboard is not None:
             train_writer.add_scalar("loss", train_loss, epoch)
             train_writer.add_scalar("mae", train_mae, epoch)
@@ -346,6 +361,7 @@ def main():
         if val_mae < best_val_mae:
             print(f"=> [epoch {epoch:03d}] best val mae was improved from {best_val_mae:.3f} to {val_mae:.3f}")
             best_val_mae = val_mae
+            all_std = std
         else:
             print(f"=> [epoch {epoch:03d}] best val mae was not improved from {best_val_mae:.3f} ({val_mae:.3f})")
 
@@ -363,6 +379,10 @@ def main():
         title=history["name"],
         save_path=f"Images/training_curves_Dex.png",
     )
-
+    plot_uncertainty_by_age(
+        all_std,        # écarts-types récupérés lors du dernier run_epoch
+        val_dataset,    # dataset de validation pour avoir les âges
+        save_path="Images/uncertainty_by_age.png"
+    )
 if __name__ == '__main__':
     main()

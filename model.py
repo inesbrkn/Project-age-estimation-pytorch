@@ -4,7 +4,104 @@ import pretrainedmodels
 import pretrainedmodels.utils
 import timm
 from defaults import _C as cfg
+import torch
+import torch.nn.functional as F
 
+def compute_predictions(outputs, mode, device):
+    
+    if mode == "dex" or mode == "weightLoss":
+        ages = torch.arange(0, 101, device=device).float()
+        probs = F.softmax(outputs, dim=-1)
+        return (probs * ages).sum(dim=1)
+
+    elif mode == "residual":
+
+        cls_logits, residual = outputs
+        predicted = cls_logits.argmax(1)
+        pred_age = predicted.float() + residual.squeeze()
+
+        return pred_age
+    
+    elif mode in ["gaussian", "laplace"]:
+        mu, _ = outputs
+        return mu.squeeze(-1).clamp(0, 100)
+    elif  mode == "none" : 
+        return outputs.argmax(1).float()
+    else:
+        raise ValueError(f"Unknown mode: {mode}")
+    
+    
+def tta_predict2(model, x, mode, device, n_aug=5):
+    preds = []
+
+    model.eval()
+
+    with torch.no_grad():
+
+        for _ in range(n_aug):
+
+            x_aug = x.clone()
+
+            # flip horizontal aléatoire
+            if torch.rand(1) < 0.5:
+                x_aug = torch.flip(x_aug, dims=[3])
+
+            outputs = model(x_aug)
+
+            pred = compute_predictions(outputs, mode, device)
+
+            preds.append(pred)
+
+    preds = torch.stack(preds)   # shape : [n_aug, batch]
+
+    mean_pred = preds.mean(0)
+    std_pred = preds.std(0)
+
+    return mean_pred, std_pred
+
+def tta_predict(model, x, mode, device):
+    """
+    Test-Time Augmentation robuste.
+
+    x : tensor [B, C, H, W]
+
+    Returns
+    -------
+    mean_pred : moyenne des prédictions
+    std_pred  : incertitude (écart-type)
+    """
+
+    tta_transforms = [
+        lambda img: img,  # original
+        lambda img: torch.flip(img, dims=[3]),  # horizontal flip
+        lambda img: torch.rot90(img, 1, dims=[2,3]),  # rotate 90
+        lambda img: torch.rot90(img, -1, dims=[2,3]), # rotate -90
+        lambda img: F.interpolate(img, scale_factor=0.9, mode="bilinear", align_corners=False),
+        lambda img: F.interpolate(img, scale_factor=1.1, mode="bilinear", align_corners=False),
+    ]
+
+    preds = []
+
+    for t in tta_transforms:
+
+        x_aug = t(x)
+
+        # si resize change la taille on remet la taille originale
+        if x_aug.shape[-1] != x.shape[-1]:
+            x_aug = F.interpolate(x_aug, size=x.shape[-2:], mode="bilinear", align_corners=False)
+
+        outputs = model(x_aug)
+        pred = compute_predictions(outputs, mode, device)
+
+        preds.append(pred)
+
+    preds = torch.stack(preds)  # [TTA, B, classes]
+
+    mean_pred = preds.mean(0)
+    std_pred = preds.std(0)
+
+    return mean_pred, std_pred
+    
 # ---------------------------
 # Modèle Residual Method
 # ---------------------------
@@ -73,18 +170,14 @@ def enable_dropout(model):
         if isinstance(m, nn.Dropout):
             m.train()
 
-def mc_dropout_predict(model, x, n_samples=50):
+def mc_dropout_predict(model, x, mode, device, n_samples=50):
     """Estime la prédiction moyenne et l'incertitude via MC-Dropout."""
     enable_dropout(model)
     preds = []
     with torch.no_grad():
         for _ in range(n_samples):
             output = model(x)
-            if isinstance(output, tuple):  # ResidualModel
-                cls_out, res_out = output
-                pred = cls_out.argmax(dim=1).float() + res_out
-            else:  # RegressionModel
-                pred = output[0]  # mu
+            pred = compute_predictions(output, mode, device)
             preds.append(pred.unsqueeze(0))
     preds = torch.cat(preds, dim=0)
     mean_pred = preds.mean(dim=0)

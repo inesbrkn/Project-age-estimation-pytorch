@@ -67,8 +67,8 @@ def main():
 
     criterion = get_criterion(cfg.MODEL.METHOD, alpha=0.5, device=device)
     print("=> start testing")
-    if cfg.TEST.MC_DROPOUT:
-        test_loss, test_mae , test_acc, gt, preds, std= run_epoch(test_loader, model, criterion, None, 0, device, mode=cfg.MODEL.METHOD, is_train=False)
+    if cfg.MC_DROPOUT or cfg.TTA > 0:
+        test_loss, test_mae , test_acc, gt, preds, std= run_epoch(test_loader, model, criterion, None, 0, device, mode=cfg.MODEL.METHOD, is_train=False, return_preds=True)
         plot_uncertainty(preds, gt, std)
     else :
         test_loss, test_mae, test_acc, preds, gt = run_epoch(test_loader,model,criterion,None,0,device,mode=cfg.MODEL.METHOD,is_train=False)    
