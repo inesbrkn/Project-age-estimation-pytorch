@@ -3,6 +3,31 @@ import torch
 import torch.nn as nn
 from age_distribution import count_examples_by_age
 from defaults import _C as cfg
+import torch.nn.functional as F
+"""
+class ResidualLoss(nn.Module):
+    def __init__(self, alpha=0.2, label_smoothing=0.0):
+        super().__init__()
+        self.cls_loss = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
+        self.res_loss = nn.MSELoss()
+        self.alpha = alpha
+
+    def forward(self, outputs, target):
+
+        cls_logits, residual = outputs
+
+        # classification loss
+        loss_cls = self.cls_loss(cls_logits, target)
+
+        # predicted class
+        pred_class = cls_logits.argmax(dim=1).detach()A
+
+        residual_target = target.float() - pred_class.float()
+
+        loss_res = self.res_loss(residual, residual_target)
+
+        return loss_cls + self.alpha * loss_res
+"""
 
 class ResidualLoss(nn.Module):
     def __init__(self, alpha=0.2, label_smoothing=0.0):
@@ -12,21 +37,16 @@ class ResidualLoss(nn.Module):
         self.alpha = alpha
 
     def forward(self, outputs, target):
-        """
-        outputs = (cls_logits, residual)
-        target = true age (LongTensor)
-        """
-
         cls_logits, residual = outputs
-
         # classification loss
         loss_cls = self.cls_loss(cls_logits, target)
 
-        # predicted class
-        pred_class = cls_logits.argmax(dim=1).detach()
+        # predicted age pour résidu (différentiable)
+        prob = torch.softmax(cls_logits, dim=1)
+        ages = torch.arange(cls_logits.size(1), device=cls_logits.device).float()
+        pred_class_soft = (prob * ages).sum(dim=1)
 
-        residual_target = target.float() - pred_class.float()
-
+        residual_target = target.float() - pred_class_soft
         loss_res = self.res_loss(residual, residual_target)
 
         return loss_cls + self.alpha * loss_res
@@ -51,22 +71,30 @@ class LaplaceLikelihoodLoss(nn.Module):
 
 class WeightedCrossEntropy(nn.Module):
     def __init__(self, weights_per_age, device="cpu"):
-        """
-        weights_per_age : tensor[101] des poids par âge (0-100)
-        """
         super().__init__()
         self.weights_per_age = weights_per_age.to(device)
         self.ce = nn.CrossEntropyLoss(reduction='none')  # per sample
 
     def forward(self, outputs, target):
-        """
-        outputs : [batch, 101] logits
-        target  : [batch] ages entiers 0-100
-        """
-        loss_raw = self.ce(outputs, target)         # shape [batch]
-        weights = self.weights_per_age[target]      # shape [batch]
+        loss_raw = self.ce(outputs, target)         
+        weights = self.weights_per_age[target]      
         loss = (loss_raw * weights).mean()
         return loss
+
+class BalancedSoftmaxLoss(nn.Module):
+
+    def __init__(self, class_counts, device="cpu"):
+        super().__init__()
+
+        counts = torch.tensor(class_counts, dtype=torch.float32)
+        self.log_prior = torch.log(counts)
+        self.log_prior = self.log_prior.to(device)
+
+    def forward(self, logits, target):
+
+        logits = logits + self.log_prior
+
+        return F.cross_entropy(logits, target)
 
 # à appeler pour recup le mode choisi
 def get_criterion(mode, alpha=0.5, device="cpu"):
@@ -80,17 +108,27 @@ def get_criterion(mode, alpha=0.5, device="cpu"):
     elif mode == "laplace":
         return LaplaceLikelihoodLoss().to(device) 
     elif mode == "weightLoss":
-            df = pd.read_csv("gt_avg_train.csv")
+        df = pd.read_csv("appa-real-release/gt_avg_train.csv")
+        counts = df["apparent_age_avg"].round().value_counts().sort_index()
+        counts = counts.reindex(range(101), fill_value=1) + 1  # éviter poids infini
 
-            counts = df["apparent_age_avg"].round().value_counts().sort_index()
+        N = counts.sum()
+        K = len(counts)
 
-            counts = counts.reindex(range(101), fill_value=1)
+        weights = N / (K * counts)
+        
+        class_weights = torch.tensor(weights.values, dtype=torch.float32).to(device)
+        return WeightedCrossEntropy(class_weights, device=device)
 
-            weights = 1.0 / counts
+    elif mode == "balancedSoftmax":
 
-            weights = weights / weights.sum()
-            class_weights = torch.tensor(weights.values, dtype=torch.float32).to(device)
-            return nn.CrossEntropyLoss(weight=class_weights)
+        df = pd.read_csv("appa-real-release/gt_avg_train.csv")
+
+        counts = df["apparent_age_avg"].round().value_counts().sort_index()
+
+        counts = counts.reindex(range(101), fill_value=1)
+
+        return BalancedSoftmaxLoss(counts.values, device=device)
     else:
         raise ValueError(f"Unknown mode: {mode}")
 

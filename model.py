@@ -9,7 +9,7 @@ import torch.nn.functional as F
 
 def compute_predictions(outputs, mode, device):
     
-    if mode == "dex" or mode == "weightLoss":
+    if mode in ["dex", "weightLoss", "balancedSoftmax"]:
         ages = torch.arange(0, 101, device=device).float()
         probs = F.softmax(outputs, dim=-1)
         return (probs * ages).sum(dim=1)
@@ -25,7 +25,8 @@ def compute_predictions(outputs, mode, device):
     elif mode in ["gaussian", "laplace"]:
         mu, _ = outputs
         return mu.squeeze(-1).clamp(0, 100)
-    elif  mode == "none" : 
+
+    elif  mode == "none": 
         return outputs.argmax(1).float()
     else:
         raise ValueError(f"Unknown mode: {mode}")
@@ -199,11 +200,7 @@ def get_model2(model_name="se_resnext50_32x4d", method=None, num_classes=101, pr
     dim_feats = base_model.last_linear.in_features
     base_model.avg_pool = nn.AdaptiveAvgPool2d(1)
 
-    if method == "dex":
-        base_model.last_linear = nn.Linear(dim_feats, num_classes)
-        return base_model
-
-    elif method == "residual":
+    if method == "residual":
         return ResidualModel(base_model, dim_feats, num_classes, p_dropout=p_dropout)
 
     elif method in ["gaussian", "laplace"]:

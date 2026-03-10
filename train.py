@@ -25,8 +25,7 @@ from dataset import FaceDataset
 from defaults import _C as cfg
 import utils as u
 from plot_log import plot_training_curves, plot_uncertainty_by_age
-
-
+from torch.utils.data import WeightedRandomSampler
 def get_args():
     model_names = sorted(name for name in pretrainedmodels.__dict__
                          if not name.startswith("__")
@@ -105,7 +104,7 @@ def run_epoch(loader,model,criterion,optimizer,epoch,device,mode,is_train,return
             x = x.to(device, non_blocking=True)
             y = y.to(device, non_blocking=True)
 
-             # calcul outputs pour la loss normale
+            # calcul outputs pour la loss normale
             outputs = model(x)
             loss = criterion(outputs, y)
 
@@ -174,33 +173,43 @@ def run_epoch(loader,model,criterion,optimizer,epoch,device,mode,is_train,return
                 )
             )
 
-    if not is_train and (cfg.MC_DROPOUT or cfg.TTA > 0):
-        all_preds = torch.cat(all_preds).numpy()
-        all_gt = torch.cat(all_gt).numpy()
-        all_std = torch.cat(all_std).numpy()
-        return loss_meter.avg, mae_meter.avg, accN_meter.avg, all_preds, all_gt, all_std
+    if not is_train:
+        if cfg.MC_DROPOUT or cfg.TTA > 0:
+            all_preds = torch.cat(all_preds).numpy()
+            all_gt = torch.cat(all_gt).numpy()
+            all_std = torch.cat(all_std).numpy()
+        elif return_preds:
+            all_preds = torch.cat(all_preds).numpy()
+            all_gt = torch.cat(all_gt).numpy()
+            all_std = None
+        else:
+            all_preds, all_gt, all_std = None, None, None
 
-    if return_preds:
-        all_preds = torch.cat(all_preds).numpy()
-        all_gt = torch.cat(all_gt).numpy()
-        return loss_meter.avg, mae_meter.avg, accN_meter.avg, all_preds, all_gt
+    return loss_meter.avg, mae_meter.avg, accN_meter.avg, all_preds, all_gt, all_std
 
-    return loss_meter.avg, mae_meter.avg, accN_meter.avg
-
-from torch.utils.data import WeightedRandomSampler
 
 def build_sampler(dataset):
+    """
+    Crée un sampler pondéré pour équilibrer les âges.
+    Utilise les âges directement depuis le dataset pour éviter un IndexError.
+    """
+    # récupère les âges depuis le dataset
+    ages = []
+    for i in range(len(dataset)):
+        _, age = dataset[i]  # FaceDataset.__getitem__ retourne (image, age)
+        ages.append(age)
 
-    ages = dataset.ages
+    ages = torch.tensor(ages).long()
 
-    counts = torch.bincount(torch.tensor(ages), minlength=101)
+    # compte le nombre d’occurrences de chaque âge
+    counts = torch.bincount(ages, minlength=101)  # suppose que l’âge max est 100
 
+    # poids inversement proportionnels à la fréquence
     weights = 1.0 / counts
-
     sample_weights = weights[ages]
 
     sampler = WeightedRandomSampler(
-        sample_weights,
+        weights=sample_weights,
         num_samples=len(sample_weights),
         replacement=True
     )
@@ -278,9 +287,11 @@ def main():
         train_loader = DataLoader(
             train_dataset,
             batch_size=cfg.TRAIN.BATCH_SIZE,
-            sampler=sampler,
-            shuffle=True,
-            num_workers=cfg.TRAIN.WORKERS, drop_last=True,pin_memory=True
+            sampler=sampler,      # sampler remplace shuffle
+            shuffle=False,
+            num_workers=cfg.TRAIN.WORKERS,
+            drop_last=True,
+            pin_memory=True
         )
 
     else:
@@ -319,9 +330,8 @@ def main():
     }
 
     for epoch in range(start_epoch, cfg.TRAIN.EPOCHS):
-        train_loss, train_mae , train_acc= run_epoch(train_loader, model, criterion, optimizer, epoch, device, mode=cfg.MODEL.METHOD, is_train=True)
+        train_loss, train_mae , train_acc,_,_,_= run_epoch(train_loader, model, criterion, optimizer, epoch, device, mode=cfg.MODEL.METHOD, is_train=True)
         val_loss, val_mae, val_acc,preds,gt,std = run_epoch(val_loader, model, criterion, None, epoch, device, mode=cfg.MODEL.METHOD, is_train=False)
-
 
         
         if args.tensorboard is not None:
@@ -361,7 +371,8 @@ def main():
         if val_mae < best_val_mae:
             print(f"=> [epoch {epoch:03d}] best val mae was improved from {best_val_mae:.3f} to {val_mae:.3f}")
             best_val_mae = val_mae
-            all_std = std
+            if cfg.MC_DROPOUT or cfg.TTA > 0:
+                all_std = std
         else:
             print(f"=> [epoch {epoch:03d}] best val mae was not improved from {best_val_mae:.3f} ({val_mae:.3f})")
 
@@ -379,10 +390,11 @@ def main():
         title=history["name"],
         save_path=f"Images/training_curves_Dex.png",
     )
-    plot_uncertainty_by_age(
-        all_std,        # écarts-types récupérés lors du dernier run_epoch
-        val_dataset,    # dataset de validation pour avoir les âges
-        save_path="Images/uncertainty_by_age.png"
-    )
+    if cfg.MC_DROPOUT or cfg.TTA > 0:
+        plot_uncertainty_by_age(
+            all_std,        # écarts-types récupérés lors du dernier run_epoch
+            val_dataset,    # dataset de validation pour avoir les âges
+            save_path="Images/uncertainty_by_age.png"
+        )
 if __name__ == '__main__':
     main()

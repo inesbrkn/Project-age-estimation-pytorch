@@ -67,12 +67,11 @@ def main():
 
     criterion = get_criterion(cfg.MODEL.METHOD, alpha=0.5, device=device)
     print("=> start testing")
+   
+    test_loss, test_mae, test_acc, preds, gt, std = run_epoch(test_loader,model,criterion,None,0,device,mode=cfg.MODEL.METHOD,is_train=False, return_preds=True)    
     if cfg.MC_DROPOUT or cfg.TTA > 0:
-        test_loss, test_mae , test_acc, gt, preds, std= run_epoch(test_loader, model, criterion, None, 0, device, mode=cfg.MODEL.METHOD, is_train=False, return_preds=True)
         plot_uncertainty(preds, gt, std)
-    else :
-        test_loss, test_mae, test_acc, preds, gt = run_epoch(test_loader,model,criterion,None,0,device,mode=cfg.MODEL.METHOD,is_train=False)    
-    
+
     print(f"test loss: {test_loss:.3f}")
     print(f"test mae: {test_mae:.3f}")
     print(f"test acc: {test_acc:.3f}")

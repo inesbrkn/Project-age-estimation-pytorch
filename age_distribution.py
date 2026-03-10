@@ -24,6 +24,22 @@ def count_examples_by_age(csv_path, age_col='apparent_age', age_min=0, age_max=1
     
     return counts
 
+def get_ages_from_csv(csv_path, age_col='apparent_age', age_min=0, age_max=100):
+
+    df = pd.read_csv(csv_path)
+
+    # trouver la colonne âge automatiquement
+    if age_col not in df.columns:
+        possible_cols = [c for c in df.columns if 'age' in c.lower()]
+        if possible_cols:
+            age_col = possible_cols[0]
+        else:
+            raise ValueError(f"Colonne d'âge introuvable dans {csv_path}")
+
+    ages = df[age_col].round().astype(int)
+
+    return ages.values
+
 def plot_age_distribution(counts, title="Distribution des âges", save_path=None):
     """
     Affiche un bar plot de la distribution des âges et l'enregistre si save_path est fourni.
