@@ -88,7 +88,8 @@ class FaceDataset(Dataset):
         img = cv2.resize(img, (self.img_size, self.img_size))
         img = self.transform(img).astype(np.float32)
 
-        return torch.from_numpy(np.transpose(img, (2, 0, 1))), np.clip(round(age), 0, 100)
+        # Garde la précision décimale pour que le résidu ne soit pas nul
+        return torch.from_numpy(np.transpose(img, (2, 0, 1))), np.clip(age, 0, 100).astype(np.float32)
 
 
 def main():
