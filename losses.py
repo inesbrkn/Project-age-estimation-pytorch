@@ -30,27 +30,27 @@ class ResidualLoss(nn.Module):
 """
 
 class ResidualLoss(nn.Module):
-    def __init__(self, alpha=0.2, label_smoothing=0.0):
+
+    def __init__(self, alpha=0.5, label_smoothing=0.0):
         super().__init__()
         self.cls_loss = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
         self.res_loss = nn.MSELoss()
         self.alpha = alpha
 
     def forward(self, outputs, target):
+
         cls_logits, residual = outputs
-        # classification loss
-        loss_cls = self.cls_loss(cls_logits, target)
 
-        # predicted age pour résidu (différentiable)
-        prob = torch.softmax(cls_logits, dim=1)
-        ages = torch.arange(cls_logits.size(1), device=cls_logits.device).float()
-        pred_class_soft = (prob * ages).sum(dim=1)
+        class_target = target.long()
 
-        residual_target = target.float() - pred_class_soft
+        residual_target = target.float() - class_target.float()
+
+        loss_cls = self.cls_loss(cls_logits, class_target)
+
         loss_res = self.res_loss(residual, residual_target)
 
         return loss_cls + self.alpha * loss_res
-
+    
 class GaussianLikelihoodLoss(nn.Module):
     def __init__(self):
         super().__init__()

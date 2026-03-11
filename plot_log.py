@@ -197,20 +197,16 @@ def plot_uncertainty_by_age(all_std, val_dataset, save_path="Images/uncertainty_
     plt.show()
 
     print(f"=> Graphique d'incertitude par âge enregistré sous {save_path}")
+import os
+import numpy as np
+import matplotlib.pyplot as plt
 
-def plot_uncertainty(predictions, targets, std_values):
+def plot_uncertainty(predictions, targets, std_values, save_dir="Images"):
     """
-    Affiche des plots pour analyser l'incertitude MC Dropout.
+    Affiche et sauvegarde des plots pour analyser l'incertitude MC Dropout.
+    """
 
-    Parameters
-    ----------
-    predictions : array-like
-        Moyenne des prédictions (MC mean)
-    targets : array-like
-        Vraies valeurs (ex: vrai âge)
-    std_values : array-like
-        Ecart-type des prédictions (MC std)
-    """
+    os.makedirs(save_dir, exist_ok=True)
 
     predictions = np.array(predictions)
     targets = np.array(targets)
@@ -224,6 +220,7 @@ def plot_uncertainty(predictions, targets, std_values):
     plt.xlabel("Prediction uncertainty (std)")
     plt.ylabel("Frequency")
     plt.title("Distribution of MC Dropout Uncertainty")
+    plt.savefig(f"{save_dir}/uncertainty_histogram.png", dpi=300, bbox_inches="tight")
     plt.show()
 
     # Scatter : incertitude vs erreur
@@ -232,12 +229,12 @@ def plot_uncertainty(predictions, targets, std_values):
     plt.xlabel("Prediction uncertainty (std)")
     plt.ylabel("Absolute Error")
     plt.title("Uncertainty vs Prediction Error")
+    plt.savefig(f"{save_dir}/uncertainty_vs_error.png", dpi=300, bbox_inches="tight")
     plt.show()
 
     # Corrélation
     corr = np.corrcoef(std_values, errors)[0,1]
     print("Correlation between uncertainty and error:", corr)
-
 
 # =========================================================
 # Main

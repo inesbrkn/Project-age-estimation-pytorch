@@ -17,8 +17,12 @@ def compute_predictions(outputs, mode, device):
     elif mode == "residual":
 
         cls_logits, residual = outputs
-        predicted = cls_logits.argmax(1)
-        pred_age = predicted.float() + residual.squeeze()
+
+        ages = torch.arange(0,101,device=device).float()
+        probs = F.softmax(cls_logits, dim=-1)
+        base_age = (probs * ages).sum(dim=1)
+
+        pred_age = base_age + residual.squeeze()
 
         return pred_age
     
@@ -198,8 +202,7 @@ def get_model2(model_name="se_resnext50_32x4d", method=None, num_classes=101, pr
     """
     base_model = pretrainedmodels.__dict__[model_name](pretrained=pretrained)
     dim_feats = base_model.last_linear.in_features
-    base_model.avg_pool = nn.AdaptiveAvgPool2d(1)
-
+    
     if method == "residual":
         return ResidualModel(base_model, dim_feats, num_classes, p_dropout=p_dropout)
 
@@ -207,6 +210,7 @@ def get_model2(model_name="se_resnext50_32x4d", method=None, num_classes=101, pr
         return RegressionModel(base_model, dim_feats, mode=method, p_dropout=p_dropout)
 
     else:
+        base_model.avg_pool = nn.AdaptiveAvgPool2d(1)
         base_model.last_linear = nn.Linear(dim_feats, num_classes)
         return base_model
 
