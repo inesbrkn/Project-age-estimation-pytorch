@@ -153,9 +153,8 @@ def run_epoch(loader,model,criterion,optimizer,epoch,device,mode,is_train,return
             loss_meter.update(loss.item(), x.size(0))
 
             # ===== stockage optionnel =====
-            if return_preds or cfg.MC_DROPOUT or cfg.TTA >0:
-                all_preds.append(preds.detach().cpu())
-                all_gt.append(y.detach().cpu())
+            all_preds.append(preds.detach().cpu())
+            all_gt.append(y.detach().cpu())
 
             # ===== backward =====
             if is_train:
@@ -173,19 +172,18 @@ def run_epoch(loader,model,criterion,optimizer,epoch,device,mode,is_train,return
                 )
             )
 
+    all_preds = torch.cat(all_preds).numpy()
+    all_gt = torch.cat(all_gt).numpy()
+    all_std = None
+    mae = (all_preds - all_gt).abs().mean()
     if not is_train:
         if cfg.MC_DROPOUT or cfg.TTA > 0:
-            all_preds = torch.cat(all_preds).numpy()
-            all_gt = torch.cat(all_gt).numpy()
             all_std = torch.cat(all_std).numpy()
-        elif return_preds:
-            all_preds = torch.cat(all_preds).numpy()
-            all_gt = torch.cat(all_gt).numpy()
-            all_std = None
-        else:
-            all_preds, all_gt, all_std = None, None, None
+        
+    else :
+        all_preds, all_gt, all_std = None, None, None
 
-    return loss_meter.avg, mae_meter.avg, accN_meter.avg, all_preds, all_gt, all_std
+    return loss_meter.avg, mae, accN_meter.avg, all_preds, all_gt, all_std
 
 
 def build_sampler(dataset):

@@ -115,7 +115,7 @@ def get_criterion(mode, alpha=0.5, device="cpu"):
         N = counts.sum()
         K = len(counts)
 
-        weights = N / (K * counts)
+        weights = N / (K * counts + 1e-6)
         
         class_weights = torch.tensor(weights.values, dtype=torch.float32).to(device)
         return WeightedCrossEntropy(class_weights, device=device)
