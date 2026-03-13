@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
-
+import numpy
 from model import get_model2
 from defaults import _C as cfg
 from train import _load_state_dict_into_model
@@ -34,7 +34,8 @@ def main():
     # 1. Charger le modèle (Ordinal ou DEX selon ta config)
     print(f"=> Chargement du modèle {cfg.MODEL.ARCH} ({cfg.MODEL.METHOD})")
     model = get_model2(model_name=cfg.MODEL.ARCH, method=cfg.MODEL.METHOD, pretrained=None)
-    checkpoint = torch.load(args.resume, map_location="cpu")
+    torch.serialization.add_safe_globals([numpy.core.multiarray.scalar])
+    checkpoint = torch.load(args.resume, map_location="cpu", weights_only=True)
     _load_state_dict_into_model(model, checkpoint["state_dict"])
     model = model.to(device)
     model.eval()
