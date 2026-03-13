@@ -100,10 +100,12 @@ def train_one_epoch(loader, model, criterion, optimizer, epoch, device, mode):
             preds = outputs[0].argmax(1) if mode == "residual" else outputs.argmax(1)
 
             correct_num = (preds == y).sum().item()
-            accN_meter.update(correct_num, x.size(0))
+            sample_num = x.size(0)
+            
+            loss_meter.update(loss.item(), sample_num )
+            accN_meter.update(correct_num,sample_num)
 
-            loss_meter.update(loss.item(), x.size(0))
-
+    
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -120,13 +122,14 @@ def train_one_epoch(loader, model, criterion, optimizer, epoch, device, mode):
 
     return loss_meter.avg, accN_meter.avg
 
-def validate_one_epoch(loader, model, criterion, epoch, device, mode, return_preds=False):
+def validate_one_epoch(loader, model, criterion,epoch, device, mode, return_preds=False):
     model.eval()
 
-    loss_meter = AverageMeter()
+    loss_monitor = AverageMeter()
+    accuracy_monitor = AverageMeter()
 
-    all_preds = []
-    all_gt = []
+    preds = []
+    gt = []
     all_std = []
 
     with torch.no_grad(), tqdm(loader) as _tqdm:
@@ -144,7 +147,7 @@ def validate_one_epoch(loader, model, criterion, epoch, device, mode, return_pre
                 else:
                     mean_pred, std_pred = tta_predict2(model, x, mode, device)
 
-                preds = mean_pred
+                preds.append(mean_pred.cpu().numpy())
                 all_std.append(std_pred.detach().cpu())
 
             elif cfg.MC_DROPOUT:
@@ -153,38 +156,37 @@ def validate_one_epoch(loader, model, criterion, epoch, device, mode, return_pre
                     model, x, mode, device, n_samples=30
                 )
 
-                preds = mean_pred
+                preds.append(mean_pred.cpu().numpy())
                 all_std.append(std_pred.detach().cpu())
 
             else:
-                preds = compute_predictions(outputs, mode, device)
+                preds.append(compute_predictions(outputs, mode, device).cpu().numpy())
 
-            loss_meter.update(loss.item(), x.size(0))
 
-            all_preds.append(preds.detach().cpu())
-            all_gt.append(y.detach().cpu())
+            if criterion is not None:
+                loss = criterion(outputs, y)
+                correct_num = preds.eq(y).sum().item()
+                sample_num = x.size(0)
+                accuracy_monitor.update(correct_num, sample_num)
+                loss_monitor.update(loss.item(), x.size(0))
 
-            _tqdm.set_postfix(
-                OrderedDict(
-                    stage="val",
-                    epoch=epoch,
-                    loss=f"{loss_meter.avg:.4f}",
-                )
-            )
+                _tqdm.set_postfix(OrderedDict(stage="val", epoch=epoch, loss=loss_monitor.avg),
+                                      acc=accuracy_monitor.avg, correct=correct_num, sample_num=sample_num)
 
-    all_preds = torch.cat(all_preds).numpy()
-    all_gt = torch.cat(all_gt).numpy()
+            gt.append(y.cpu().numpy())
 
-    mae = np.abs(all_preds - all_gt).mean()
+    preds = np.concatenate(preds)
+    gt = np.concatenate(gt)
 
-    all_std = None
+    mae = np.abs(preds - gt).mean()
+
     if cfg.MC_DROPOUT or cfg.TTA > 0:
         all_std = torch.cat(all_std).numpy()
 
     if not return_preds:
-        all_preds, all_gt, all_std = None, None, None
+        preds,gt= None, None
 
-    return loss_meter.avg, mae, all_preds, all_gt, all_std
+    return loss_monitor.avg, mae, preds, gt, all_std
 
 def build_sampler(dataset):
     """
