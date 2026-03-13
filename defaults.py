@@ -15,6 +15,7 @@ _C.MC_DROPOUT= False
 _C.CLASSIFIER = False # true si on veut que les valeurs prédites sont une classe d'age false si on veut un age continu
 _C.TTA = 0
 _C.MODEL.balanced_sampler = False
+
 # Train
 _C.TRAIN = CN()
 _C.TRAIN.SEED = 42  # seed fixe pour runs reproductibles (comparaison DEX vs Residual équitable)

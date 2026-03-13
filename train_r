@@ -83,108 +83,108 @@ def mae_by_age_group(preds, gt, groups=None):
         results.append({"name": f"{low}-{high}", "mae": float(mae), "count": int(n), "std": float(std)})
     return results
 
-
-
-def run_epoch(loader,model,criterion,optimizer,epoch,device,mode,is_train,return_preds=False):
-    model.train() if is_train else model.eval()
+def train_one_epoch(loader, model, criterion, optimizer, epoch, device, mode):
+    model.train()
 
     loss_meter = AverageMeter()
-    mae_meter = AverageMeter()
     accN_meter = AverageMeter()
+
+    with torch.enable_grad(), tqdm(loader) as _tqdm:
+        for x, y in _tqdm:
+            x = x.to(device, non_blocking=True)
+            y = y.to(device, non_blocking=True)
+
+            outputs = model(x)
+            loss = criterion(outputs, y)
+
+            preds = outputs[0].argmax(1) if mode == "residual" else outputs.argmax(1)
+
+            correct_num = (preds == y).sum().item()
+            accN_meter.update(correct_num, x.size(0))
+
+            loss_meter.update(loss.item(), x.size(0))
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            _tqdm.set_postfix(
+                OrderedDict(
+                    stage="train",
+                    epoch=epoch,
+                    loss=f"{loss_meter.avg:.4f}",
+                    accN=f"{accN_meter.avg:.4f}",
+                )
+            )
+
+
+    return loss_meter.avg, accN_meter.avg
+
+def validate_one_epoch(loader, model, criterion, epoch, device, mode, return_preds=False):
+    model.eval()
+
+    loss_meter = AverageMeter()
 
     all_preds = []
     all_gt = []
     all_std = []
 
-    ctx = torch.enable_grad() if is_train else torch.no_grad()
-    stage = "train" if is_train else "val"
-
-    with ctx, tqdm(loader) as _tqdm:
+    with torch.no_grad(), tqdm(loader) as _tqdm:
         for x, y in _tqdm:
             x = x.to(device, non_blocking=True)
             y = y.to(device, non_blocking=True)
 
-            # calcul outputs pour la loss normale
             outputs = model(x)
             loss = criterion(outputs, y)
 
-            if not is_train and ( cfg.TTA > 0) : 
-                if cfg.TTA == 1 :
-                    # MC Dropout prediction
-                    mean_pred, std_pred = tta_predict(model, x,mode, device)
+            if cfg.TTA > 0:
 
-                    preds = mean_pred
-                    # je récupère l'écart type 
-                    all_std.append(std_pred.detach().cpu())
-                else :
-                    # MC Dropout prediction
-                    mean_pred, std_pred = tta_predict2(model, x,mode, device)
-                    preds = mean_pred
-                    # je récupère l'écart type 
-                    all_std.append(std_pred.detach().cpu())
-
-            elif not is_train and cfg.MC_DROPOUT:
-
-                # MC Dropout prediction
-                mean_pred, std_pred = mc_dropout_predict(model, x,mode, device, n_samples=30)
+                if cfg.TTA == 1:
+                    mean_pred, std_pred = tta_predict(model, x, mode, device)
+                else:
+                    mean_pred, std_pred = tta_predict2(model, x, mode, device)
 
                 preds = mean_pred
-                # je récupère l'écart type 
                 all_std.append(std_pred.detach().cpu())
+
+            elif cfg.MC_DROPOUT:
+
+                mean_pred, std_pred = mc_dropout_predict(
+                    model, x, mode, device, n_samples=30
+                )
+
+                preds = mean_pred
+                all_std.append(std_pred.detach().cpu())
+
             else:
-
                 preds = compute_predictions(outputs, mode, device)
-            
-            
-            # ===== MAE correct =====
-            abs_error = (preds - y.float()).abs()
-            mae_meter.update(abs_error.sum().item(), x.size(0))
-
-            # ===== accuracy ±N ans =====
-            if cfg.CLASSIFIER == True:
-                predicted_class = outputs[0].argmax(1) if mode == "residual" else outputs.argmax(1)
-                correct_num = (predicted_class == y).sum().item()
-                accN_meter.update(correct_num, x.size(0))
-            else :
-                N = int(cfg.N)
-                within_N = (abs_error <= N).sum().item()
-                accN_meter.update(within_N, x.size(0))
 
             loss_meter.update(loss.item(), x.size(0))
 
-            # ===== stockage optionnel =====
             all_preds.append(preds.detach().cpu())
             all_gt.append(y.detach().cpu())
 
-            # ===== backward =====
-            if is_train:
-                optimizer.zero_grad(set_to_none=True)
-                loss.backward()
-                optimizer.step()
-
             _tqdm.set_postfix(
                 OrderedDict(
-                    stage=stage,
+                    stage="val",
                     epoch=epoch,
                     loss=f"{loss_meter.avg:.4f}",
-                    mae=f"{mae_meter.avg:.4f}",
-                    accN=f"{accN_meter.avg:.4f}",
                 )
             )
 
     all_preds = torch.cat(all_preds).numpy()
     all_gt = torch.cat(all_gt).numpy()
-    all_std = None
+
     mae = np.abs(all_preds - all_gt).mean()
-    if not is_train:
-        if cfg.MC_DROPOUT or cfg.TTA > 0:
-            all_std = torch.cat(all_std).numpy()
-        
-    else :
+
+    all_std = None
+    if cfg.MC_DROPOUT or cfg.TTA > 0:
+        all_std = torch.cat(all_std).numpy()
+
+    if not return_preds:
         all_preds, all_gt, all_std = None, None, None
 
-    return loss_meter.avg, mae, accN_meter.avg, all_preds, all_gt, all_std
-
+    return loss_meter.avg, mae, all_preds, all_gt, all_std
 
 def build_sampler(dataset):
     """
@@ -240,11 +240,12 @@ def main():
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = model.to(device)
-# ----- Reprise depuis un checkpoint (--resume) -----
+    # ----- Reprise depuis un checkpoint (--resume) -----
+    # On charge AVANT d'envelopper le modèle avec DataParallel, pour pouvoir utiliser
+    # _load_state_dict_into_model et accepter un checkpoint sauvegardé avec ou sans DataParallel.
     resume_path = args.resume
-    checkpoint = None
+    checkpoint = None  # gardé pour recharger le scheduler plus bas
 
- 
     if resume_path:
         if Path(resume_path).is_file():
             print("=> loading checkpoint '{}'".format(resume_path))
@@ -288,17 +289,16 @@ def main():
             sampler=sampler,      # sampler remplace shuffle
             shuffle=False,
             num_workers=cfg.TRAIN.WORKERS,
-            drop_last=True,
-            pin_memory=True
+            drop_last=True
         )
 
     else:
         train_loader = DataLoader(train_dataset, batch_size=cfg.TRAIN.BATCH_SIZE, shuffle=True,
-                              num_workers=cfg.TRAIN.WORKERS, drop_last=True,pin_memory=True)
+                              num_workers=cfg.TRAIN.WORKERS, drop_last=True)
 
     val_dataset = FaceDataset(args.data_dir, "valid", img_size=cfg.MODEL.IMG_SIZE, augment=False)
     val_loader = DataLoader(val_dataset, batch_size=cfg.TEST.BATCH_SIZE, shuffle=False,
-                            num_workers=cfg.TRAIN.WORKERS, drop_last=False, pin_memory=True)
+                            num_workers=cfg.TRAIN.WORKERS, drop_last=False)
 
     # Pour que le learning rate diminue pendant l'entrainement
     scheduler = StepLR(optimizer, step_size=cfg.TRAIN.LR_DECAY_STEP, gamma=cfg.TRAIN.LR_DECAY_RATE,
@@ -315,8 +315,6 @@ def main():
         train_writer = SummaryWriter(log_dir=args.tensorboard + "/" + opts_prefix + "_train")
         val_writer = SummaryWriter(log_dir=args.tensorboard + "/" + opts_prefix + "_val")
 
-    best_val_mae = 10000.0
-    
     history = {
         "name": f"{cfg.MODEL.ARCH}-{cfg.MODEL.METHOD}",
         "train_loss": [],
@@ -327,14 +325,15 @@ def main():
         "val_acc": [],
     }
 
+    all_std=[]
     for epoch in range(start_epoch, cfg.TRAIN.EPOCHS):
-        train_loss, train_mae , train_acc,_,_,_= run_epoch(train_loader, model, criterion, optimizer, epoch, device, mode=cfg.MODEL.METHOD, is_train=True)
-        val_loss, val_mae, val_acc,preds,gt,std = run_epoch(val_loader, model, criterion, None, epoch, device, mode=cfg.MODEL.METHOD, is_train=False)
+        train_loss,  train_acc= train_one_epoch(train_loader, model, criterion, optimizer, epoch, device, mode=cfg.MODEL.METHOD, is_train=True)
+        val_loss, val_mae, val_acc,preds,gt,std = validate_one_epoch(val_loader, model, criterion, None, epoch, device, mode=cfg.MODEL.METHOD, is_train=False)
 
         
         if args.tensorboard is not None:
             train_writer.add_scalar("loss", train_loss, epoch)
-            train_writer.add_scalar("mae", train_mae, epoch)
+            #train_writer.add_scalar("mae", train_mae, epoch)
             train_writer.add_scalar("acc", train_acc, epoch)
             val_writer.add_scalar("loss", val_loss, epoch)
             val_writer.add_scalar("acc", val_acc, epoch)
@@ -343,38 +342,53 @@ def main():
         # ===== save history =====
         history["train_loss"].append(train_loss)
         history["val_loss"].append(val_loss)
-        history["train_mae"].append(train_mae)
+        #history["train_mae"].append(train_mae)
         history["val_mae"].append(val_mae)
         history["train_acc"].append(train_acc)
         history["val_acc"].append(val_acc)
 
         # adjust learning rate
         scheduler.step()
-
-        model_state_dict = model.module.state_dict() if args.multi_gpu else model.state_dict()
-        torch.save(
+        # ----- Checkpoint "best" : un seul fichier best.pth (on écrase l'ancien) -----
+        # Évite de remplir le disque (surtout sur Colab). On ne garde que le meilleur modèle selon val MAE.
+        if val_mae < best_val_mae:
+            if cfg.MC_DROPOUT or cfg.TTA >0 :
+                all_std.append(std)
+            print(f"=> [epoch {epoch:03d}] best val mae was improved from {best_val_mae:.3f} to {val_mae:.3f}")
+            best_val_mae = val_mae
+            model_state_dict = model.module.state_dict() if args.multi_gpu else model.state_dict()
+            torch.save(
                 {
                     'epoch': epoch + 1,
                     'arch': cfg.MODEL.ARCH,
                     'state_dict': model_state_dict,
                     'optimizer_state_dict': optimizer.state_dict(),
                     'scheduler_state_dict': scheduler.state_dict(),
-                    'best_val_mae': val_mae,
+                    'best_val_mae': best_val_mae,
                 },
+                str(checkpoint_dir / "best.pth")
+            )
 
-                str(checkpoint_dir / "last.pth")
+        # ----- Checkpoint "last" : à chaque fin d'epoch -----
+        # Permet de reprendre avec --resume au bon epoch (modèle + optimizer + scheduler + best_val_mae).
+        # Indispensable après une déconnexion Colab : on relance avec --resume checkpoint/last.pth
+        # (en pointant le dossier sur Drive) et l'entraînement continue au lieu de repartir de zéro.
+        model_state_dict = model.module.state_dict() if args.multi_gpu else model.state_dict()
+        torch.save(
+            {
+                'epoch': epoch + 1,
+                'arch': cfg.MODEL.ARCH,
+                'state_dict': model_state_dict,
+                'optimizer_state_dict': optimizer.state_dict(),
+                'scheduler_state_dict': scheduler.state_dict(),
+                'best_val_mae': best_val_mae,
+            },
+            str(checkpoint_dir / "last.pth")
         )
-        
-        # checkpoint
-        if val_mae < best_val_mae:
-            print(f"=> [epoch {epoch:03d}] best val mae was improved from {best_val_mae:.3f} to {val_mae:.3f}")
-            best_val_mae = val_mae
-            if cfg.MC_DROPOUT or cfg.TTA > 0:
-                all_std = std
-        else:
+
+        if val_mae >= best_val_mae:
             print(f"=> [epoch {epoch:03d}] best val mae was not improved from {best_val_mae:.3f} ({val_mae:.3f})")
 
-        
 
     print("=> training finished")
     print(f"additional opts: {args.opts}")
@@ -396,3 +410,6 @@ def main():
         )
 if __name__ == '__main__':
     main()
+
+
+# verifier le code de base 
