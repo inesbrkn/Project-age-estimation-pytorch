@@ -4,7 +4,6 @@ import pretrainedmodels.utils
 
 """
     crée un modèle CNN pré-entraîné adapté à la prédiction d'âges.
-
     - les arguments
         model_name (str): nom du modèle pré-entraîné (par défaut SE-ResNeXt50).
         num_classes (int): nombre de classes de sortie (=> ici 101 pour les âges 0-100).

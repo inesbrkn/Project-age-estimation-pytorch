@@ -54,11 +54,9 @@ class ImgAugTransform:
 # Dataset PyTorch
 # =========================================================
 class FaceDataset(Dataset):
-    def __init__(self, data_dir, data_type, img_size=224, augment=False, age_stddev=1.0):
+    def __init__(self, data_dir, data_type, img_size=224, augment=False, age_stddev=1.0, synth_dir=None, synth_only=False):
         assert data_type in ("train", "valid", "test")
-        csv_path = Path(data_dir) / f"gt_avg_{data_type}.csv"
-        img_dir = Path(data_dir) / data_type
-
+        
         self.img_size = img_size
         self.augment = augment
         self.age_stddev = age_stddev
@@ -66,33 +64,42 @@ class FaceDataset(Dataset):
         if augment:
             self.transform = ImgAugTransform()
         else:
-            # Si pas d'augmentation, juste identité
             self.transform = lambda img: img
 
         self.x = []
         self.y = []
         self.std = []
 
-        df = pd.read_csv(csv_path)
-
         ignore_path = Path(__file__).resolve().parent / "ignore_list.csv"
-        ignore_img_names = []
-        if ignore_path.exists():
-            ignore_img_names = list(pd.read_csv(ignore_path)["img_name"].values)
+        ignore_img_names = list(pd.read_csv(ignore_path)["img_name"].values) if ignore_path.exists() else []
 
-        for _, row in df.iterrows():
-            img_name = row["file_name"]
+        # --- CHARGEMENT DES DONNÉES RÉELLES ---
+        if not synth_only:
+            csv_path = Path(data_dir) / f"gt_avg_{data_type}.csv"
+            img_dir = Path(data_dir) / data_type
+            if csv_path.exists():
+                df = pd.read_csv(csv_path)
+                for _, row in df.iterrows():
+                    img_name = row["file_name"]
+                    if img_name in ignore_img_names:
+                        continue
+                    img_path = img_dir / f"{img_name}_face.jpg"
+                    if img_path.is_file():
+                        self.x.append(str(img_path))
+                        self.y.append(row["apparent_age_avg"])
+                        self.std.append(row["apparent_age_std"])
 
-            if img_name in ignore_img_names:
-                continue
-
-            img_path = img_dir / f"{img_name}_face.jpg"
-            if not img_path.is_file():
-                continue
-
-            self.x.append(str(img_path))
-            self.y.append(row["apparent_age_avg"])
-            self.std.append(row["apparent_age_std"])
+        # --- CHARGEMENT DES DONNÉES SYNTHÉTIQUES (Uniquement pour le Train) ---
+        if data_type == "train" and synth_dir is not None:
+            synth_csv = Path(synth_dir) / "gt_avg_synthetic.csv"
+            if synth_csv.exists():
+                df_synth = pd.read_csv(synth_csv)
+                for _, row in df_synth.iterrows():
+                    img_path = Path(synth_dir) / f"{row['file_name']}.jpg"
+                    if img_path.is_file():
+                        self.x.append(str(img_path))
+                        self.y.append(row["apparent_age_avg"])
+                        self.std.append(row["apparent_age_std"])
 
     def __len__(self):
         return len(self.y)

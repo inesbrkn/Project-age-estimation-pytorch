@@ -55,8 +55,10 @@ Download and extract the [APPA-REAL dataset](http://chalearnlap.cvc.uab.es/datas
 > The APPA-REAL database contains 7,591 images with associated real and apparent age labels. The total number of apparent votes is around 250,000. On average we have around 38 votes per each image and this makes the average apparent age very stable (0.3 standard error of the mean).
 
 ```bash
-wget http://158.109.8.102/AppaRealAge/appa-real-release.zip
+
+wget https://data.chalearnlap.cvc.uab.cat/AppaRealAge/appa-real-release.zip
 unzip appa-real-release.zip
+
 ```
 
 #### Train Model

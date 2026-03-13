@@ -79,6 +79,14 @@ def get_args():
         help="Modify config options using the command-line",
     )
     args = parser.parse_args()
+    parser.add_argument(
+        "--synth_dir", 
+        type=str, default=None, 
+        help="Directory containing synthetic images and CSV")
+    parser.add_argument(
+        "--synth_only", 
+        action="store_true", 
+        help="Train ONLY on synthetic data")
     return args
 
 def train_cls(train_loader, model, criterion, optimizer, epoch, device, method):
@@ -261,6 +269,8 @@ def main():
         img_size=cfg.MODEL.IMG_SIZE,
         augment=True,
         age_stddev=cfg.TRAIN.AGE_STDDEV,
+        synth_dir=args.synth_dir,       # <--- NOUVEAU
+        synth_only=args.synth_only      # <--- NOUVEAU
     )
     train_loader = DataLoader(
         train_dataset,
@@ -369,4 +379,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
