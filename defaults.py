@@ -7,7 +7,7 @@ _C.MODEL = CN()
 # Backbone : python train.py -h liste les noms. Ex. se_resnext50_32x4d, resnet18, resnet50, etc.
 _C.MODEL.ARCH = "se_resnext50_32x4d"
 _C.MODEL.IMG_SIZE = 224
-_C.MODEL.METHOD = "ordinal"  # "dex" (classification DEX) ou "residual" (Residual DEX)
+_C.MODEL.METHOD = "DEX"  # "dex" (classification DEX) ou "residual" (Residual DEX)
 _C.MODEL.LABEL_SMOOTHING = 0.1  # label smoothing pour la partie classification (DEX ou Residual)
 _C.MODEL.TASK = "residual"  # champ descriptif : "dex", "residual" ou "classification" selon l'expérience
 # Train
