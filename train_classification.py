@@ -78,7 +78,6 @@ def get_args():
         nargs=argparse.REMAINDER,
         help="Modify config options using the command-line",
     )
-    args = parser.parse_args()
     parser.add_argument(
         "--synth_dir", 
         type=str, default=None, 
@@ -87,7 +86,7 @@ def get_args():
         "--synth_only", 
         action="store_true", 
         help="Train ONLY on synthetic data")
-    return args
+    return parser.parse_args()
 
 def train_cls(train_loader, model, criterion, optimizer, epoch, device, method):
     """
