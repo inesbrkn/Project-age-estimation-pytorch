@@ -10,7 +10,13 @@ def compute_predictions(outputs, mode, device):
         ages = torch.arange(0, 101, device=device).float()
         probs = F.softmax(outputs, dim=-1)
         return (probs * ages).sum(dim=1)
-
+    elif mode == "ordinal":
+            logits = outputs
+            # age estimé = somme des probabilités sigmoid(logits)
+            probs = torch.sigmoid(logits)
+            age_est = probs.sum(dim=1)
+            predicted = age_est.round().clamp(0, 100).long()
+            return predicted
     elif mode == "residual":
 
         cls_logits, residual = outputs

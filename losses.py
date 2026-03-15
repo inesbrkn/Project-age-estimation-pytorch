@@ -29,6 +29,29 @@ class ResidualLoss(nn.Module):
         return loss_cls + self.alpha * loss_res
 """
 
+class OrdinalLoss(nn.Module):
+    """
+    Loss pour la régression ordinale :
+    pour K classes (0..K-1), le modèle prédit K-1 sorties binaires \"age > k ?\".
+    On applique une BCEWithLogitsLoss sur ces sorties.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.bce = nn.BCEWithLogitsLoss()
+
+    def forward(self, logits, ages):
+        """
+        logits: [batch, K-1]
+        ages:  [batch] (âges entiers 0..K-1)
+        """
+        K_minus1 = logits.size(1)
+        K = K_minus1 + 1
+        thresholds = torch.arange(0, K - 1, device=logits.device).unsqueeze(0)  # [1, K-1]
+        ages = ages.unsqueeze(1)  # [batch, 1]
+        targets = (ages > thresholds).float()  # [batch, K-1]
+        return self.bce(logits, targets)
+    
 class ResidualLoss(nn.Module):
 
     def __init__(self, alpha=0.5, label_smoothing=0.0):
@@ -101,6 +124,8 @@ def get_criterion(mode, alpha=0.5, device="cpu"):
     labelSmoothing = cfg.MODEL.LABEL_SMOOTHING
     if mode == "residual":
         return ResidualLoss(alpha=alpha, label_smoothing=labelSmoothing).to(device)
+    elif mode == "ordinal": 
+        return OrdinalLoss().to(device)
     elif mode == "dex" or mode == "none":
         return nn.CrossEntropyLoss(label_smoothing=labelSmoothing).to(device)
     elif mode == "gaussian":

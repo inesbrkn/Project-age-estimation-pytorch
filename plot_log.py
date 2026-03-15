@@ -108,8 +108,8 @@ def read_scalars(log_dir, tag):
 
     events = ea.Scalars(tag)
     values = [e.value for e in events]
-    print("Nb events:", len(values))
-    return values
+
+    return values[len(values)-cfg.TRAIN.EPOCHS:]
 
 # =========================================================
 # Superposer deux méthodes sur le même graphique
@@ -248,6 +248,8 @@ def main():
 
     if args.compare:
         
+        
+        
         # Dossiers TensorBoard pour DEX, Laplace, Gaussian
         dex_train = logdir / "n_MODEL.METHOD_dex_train"
         dex_val   = logdir / "n_MODEL.METHOD_dex_val"
@@ -258,21 +260,16 @@ def main():
         gaus_train = logdir / "n_MODEL.METHOD_gaussian_train"
         gaus_val   = logdir / "n_MODEL.METHOD_gaussian_val"
         
-        none_train = logdir / "essaye_MODEL.METHOD_none_train"
-        none_val   = logdir / "essaye_MODEL.METHOD_none_val"
+        none_train = logdir / "essayeMODEL.METHOD_none_train"
+        none_val   = logdir / "essayeMODEL.METHOD_none_val"
 
         residual_train = logdir / "MODEL.METHOD_dex_TRAIN.LR_0.1_train"
         residual_val   = logdir / "MODEL.METHOD_dex_TRAIN.LR_0.1_val"
+
         plot_two_methods(   
-            train_logs=[none_train,residual_train],
-            val_logs=[ none_val, residual_val],
-            names=["Residual"],
-            title=args.title
-        )
-        plot_two_methods(   
-            train_logs=[dex_train, lap_train, gaus_train,none_train, residual_train],
-            val_logs=[dex_val, lap_val, gaus_val,none_val,  residual_val],
-            names=["DEX", "Laplace", "Gaussian","none", "Residual"],
+            train_logs=[dex_train, lap_train, gaus_train,none_train],
+            val_logs=[dex_val, lap_val, gaus_val,none_val],
+            names=["DEX", "Laplace", "Gaussian","none"],
             title=args.title
         )
         """
