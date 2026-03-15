@@ -1,15 +1,12 @@
 import torch
 import torch.nn as nn
-import pretrainedmodels
-import pretrainedmodels.utils
 import timm
 from defaults import _C as cfg
-import torch
 import torch.nn.functional as F
 
 def compute_predictions(outputs, mode, device):
     
-    if mode in ["dex", "weightLoss", "balancedSoftmax"]:
+    if mode == "dex" or mode== "weightLoss":
         ages = torch.arange(0, 101, device=device).float()
         probs = F.softmax(outputs, dim=-1)
         return (probs * ages).sum(dim=1)
@@ -17,20 +14,15 @@ def compute_predictions(outputs, mode, device):
     elif mode == "residual":
 
         cls_logits, residual = outputs
-
-        ages = torch.arange(0,101,device=device).float()
-        probs = F.softmax(cls_logits, dim=-1)
-        base_age = (probs * ages).sum(dim=1)
-
-        pred_age = base_age + residual.squeeze()
+        predicted = cls_logits.argmax(1)
+        pred_age = predicted.float() + residual.squeeze()
 
         return pred_age
     
     elif mode in ["gaussian", "laplace"]:
         mu, _ = outputs
         return mu.squeeze(-1).clamp(0, 100)
-
-    elif  mode == "none": 
+    elif  mode == "none" : 
         return outputs.argmax(1).float()
     else:
         raise ValueError(f"Unknown mode: {mode}")
@@ -106,73 +98,85 @@ def tta_predict(model, x, mode, device):
     std_pred = preds.std(0)
 
     return mean_pred, std_pred
-    
-# ---------------------------
-# Modèle Residual Method
-# ---------------------------
+
+# =====================================================
+# Residual Model
+# =====================================================
 class ResidualModel(nn.Module):
     def __init__(self, base_model, dim_feats, num_classes=101, p_dropout=0.5):
         super().__init__()
         self.base = base_model
-        self.base.last_linear = nn.Linear(dim_feats, num_classes)  # classe principale
-        self.residual = nn.Linear(dim_feats, 1)  # résidu
-        self.base.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.base.classifier = nn.Linear(dim_feats, num_classes)
+        self.residual = nn.Linear(dim_feats, 1)
         self.dropout = nn.Dropout(p=p_dropout)
 
     def forward(self, x):
-        feats = self.base.features(x)
-        feats = self.base.avg_pool(feats).view(feats.size(0), -1)
+        # features EfficientNet
+        feats = self.base.forward_features(x)
+
+        # FIX CRITIQUE
+        feats = self.base.global_pool(feats)
+        feats = feats.flatten(1)
+
         if cfg.DROPOUT:
             feats = self.dropout(feats)
-        cls_out = self.base.last_linear(feats)
+
+        cls_out = self.base.classifier(feats)
         res_out = self.residual(feats).squeeze(1)
         return cls_out, res_out
 
-# ---------------------------
-# Regression Head
-# ---------------------------
+
+# =====================================================
+# Regression Head (Gaussian / Laplace)
+# =====================================================
 class RegressionHead(nn.Module):
     def __init__(self, in_features, mode):
         super().__init__()
-        self.fc = nn.Linear(in_features, 2)  # mu + log_var/log_b
+        self.fc = nn.Linear(in_features, 2)  # mu + scale
         self.mode = mode
 
     def forward(self, x):
         out = self.fc(x)
         mu, scale_param = out[:, 0], out[:, 1]
-        if self.mode == "gaussian":
-            return mu, scale_param
-        elif self.mode == "laplace":
+
+        if self.mode in ["gaussian", "laplace"]:
             return mu, scale_param
         else:
             raise ValueError(f"Unknown regression mode: {self.mode}")
 
-# ---------------------------
-# Modèle Regression (mu + incertitude)
-# ---------------------------
+
+# =====================================================
+# Regression Model
+# =====================================================
 class RegressionModel(nn.Module):
     def __init__(self, base_model, dim_feats, mode, p_dropout=0.5):
         super().__init__()
         self.base = base_model
-        self.base.last_linear = nn.Identity()
+        self.base.classifier = nn.Identity()
         self.head = RegressionHead(dim_feats, mode=mode)
         self.dropout = nn.Dropout(p=p_dropout)
-        self.base.avg_pool = nn.AdaptiveAvgPool2d(1)
 
     def forward(self, x):
-        feats = self.base.features(x)
-        feats = self.base.avg_pool(feats).view(feats.size(0), -1)
+        feats = self.base.forward_features(x)
+
+        # FIX CRITIQUE
+        feats = self.base.global_pool(feats)
+        feats = feats.flatten(1)
+
         if cfg.DROPOUT:
             feats = self.dropout(feats)
+
         return self.head(feats)
 
-# ---------------------------
-# Fonction pour activer Dropout en inference (MC-Dropout)
-# ---------------------------
+
+# =====================================================
+# Enable Dropout at inference (MC Dropout)
+# =====================================================
 def enable_dropout(model):
     """Active tous les Dropout pour l'inférence."""
     for m in model.modules():
         if isinstance(m, nn.Dropout):
+            print("Dropout layer:", m)
             m.train()
 
 def mc_dropout_predict(model, x, mode, device, n_samples=50):
@@ -189,37 +193,101 @@ def mc_dropout_predict(model, x, mode, device, n_samples=50):
     std_pred = preds.std(dim=0)
     return mean_pred, std_pred
 
-# ---------------------------
-# Fonction pour récupérer le modèle
-# ---------------------------
-def get_model2(model_name="se_resnext50_32x4d", method=None, num_classes=101, pretrained="imagenet", p_dropout=0.5):
+
+
+# =====================================================
+# Model factory
+# =====================================================
+def get_model2(
+    model_name="efficientnet_b0",
+    method=None,
+    num_classes=101,
+    pretrained=True,
+    p_dropout=0.5,
+):
     """
     Retourne un modèle adapté à la méthode choisie :
-      - method="dex" : DEX (softmax sur 101 classes)
-      - method="residual" : Residual Method
-      - method in ["gaussian", "laplace"] : RegressionModel
-      - method=None ou "" : modèle classique
+      - dex
+      - residual
+      - gaussian
+      - laplace
     """
-    base_model = pretrainedmodels.__dict__[model_name](pretrained=pretrained)
-    dim_feats = base_model.last_linear.in_features
-    
-    if method == "residual":
-        return ResidualModel(base_model, dim_feats, num_classes, p_dropout=p_dropout)
 
-    elif method in ["gaussian", "laplace"]:
-        return RegressionModel(base_model, dim_feats, mode=method, p_dropout=p_dropout)
+    # timm propre
+    if method in ["dex", "weightLoss", "none"]:
+
+        base_model = timm.create_model(
+            model_name,
+            pretrained=pretrained,
+            num_classes=num_classes
+        )
 
     else:
-        base_model.avg_pool = nn.AdaptiveAvgPool2d(1)
-        base_model.last_linear = nn.Linear(dim_feats, num_classes)
+
+        base_model = timm.create_model(
+            model_name,
+            pretrained=pretrained,
+            num_classes=0
+        )
+        
+    dim_feats = base_model.num_features
+
+    # =========================
+    # DEX
+    # =========================
+    if method == "dex":
+        base_model.classifier = nn.Linear(dim_feats, num_classes)
         return base_model
 
-# ---------------------------
-# Test / main
-# ---------------------------
-def main():
-    model = get_model2(method="residual")
-    print(model)
+    # =========================
+    # Residual
+    # =========================
+    elif method == "residual":
+        return ResidualModel(
+            base_model,
+            dim_feats,
+            num_classes,
+            p_dropout=p_dropout,
+        )
 
-if __name__ == '__main__':
+    # =========================
+    # Gaussian / Laplace
+    # =========================
+    elif method in ["gaussian", "laplace"]:
+        return RegressionModel(
+            base_model,
+            dim_feats,
+            mode=method,
+            p_dropout=p_dropout,
+        )
+
+    # =========================
+    # fallback
+    # =========================
+    else:
+        base_model.classifier = nn.Linear(dim_feats, num_classes)
+        return base_model
+
+
+# =====================================================
+# Test
+# =====================================================
+def main():
+    model = get_model2(
+        model_name="efficientnet_b0",
+        method="residual",
+    )
+
+    x = torch.randn(2, 3, 224, 224)
+    y = model(x)
+
+    print(" Model OK")
+    if isinstance(y, tuple):
+        print("cls shape:", y[0].shape)
+        print("res shape:", y[1].shape)
+    else:
+        print("output shape:", y[0].shape)
+
+
+if __name__ == "__main__":
     main()

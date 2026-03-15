@@ -26,6 +26,7 @@ from defaults import _C as cfg
 import utils as u
 from plot_log import plot_training_curves, plot_uncertainty_by_age
 from torch.utils.data import WeightedRandomSampler
+
 def get_args():
     model_names = sorted(name for name in pretrainedmodels.__dict__
                          if not name.startswith("__")
@@ -87,7 +88,9 @@ def train_one_epoch(loader, model, criterion, optimizer, epoch, device, mode):
     model.train()
 
     loss_meter = AverageMeter()
-    accN_meter = AverageMeter()
+    acc_meter = AverageMeter()
+    preds = []
+    gt = []
 
     with torch.enable_grad(), tqdm(loader) as _tqdm:
         for x, y in _tqdm:
@@ -97,30 +100,37 @@ def train_one_epoch(loader, model, criterion, optimizer, epoch, device, mode):
             outputs = model(x)
             loss = criterion(outputs, y)
 
-            preds = outputs[0].argmax(1) if mode == "residual" else outputs.argmax(1)
+            predicted = outputs[0].argmax(1) if mode == "residual" else outputs.argmax(1)
 
-            correct_num = (preds == y).sum().item()
+            pred= compute_predictions(outputs, mode, device)
+          
+
+            correct_num = (predicted == y).sum().item()
             sample_num = x.size(0)
             
             loss_meter.update(loss.item(), sample_num )
-            accN_meter.update(correct_num,sample_num)
+            acc_meter.update(correct_num,sample_num)
 
     
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-
+            gt.append(y.cpu().numpy())
+            preds.append(pred.detach().cpu().numpy())
             _tqdm.set_postfix(
                 OrderedDict(
                     stage="train",
                     epoch=epoch,
                     loss=f"{loss_meter.avg:.4f}",
-                    accN=f"{accN_meter.avg:.4f}",
+                    accN=f"{acc_meter.avg:.4f}",
                 )
             )
 
+    preds = np.concatenate(preds)
+    gt = np.concatenate(gt)
 
-    return loss_meter.avg, accN_meter.avg
+    mae = np.abs(preds - gt).mean()
+    return loss_meter.avg, acc_meter.avg, mae
 
 def validate_one_epoch(loader, model, criterion,epoch, device, mode, return_preds=False):
     model.eval()
@@ -138,7 +148,6 @@ def validate_one_epoch(loader, model, criterion,epoch, device, mode, return_pred
             y = y.to(device, non_blocking=True)
 
             outputs = model(x)
-            loss = criterion(outputs, y)
 
             if cfg.TTA > 0:
 
@@ -163,11 +172,14 @@ def validate_one_epoch(loader, model, criterion,epoch, device, mode, return_pred
                 preds.append(compute_predictions(outputs, mode, device).cpu().numpy())
 
 
+            predicted = outputs[0].argmax(1) if mode == "residual" else outputs.argmax(1)
+
+            correct_num = (predicted == y).sum().item()
+            sample_num = x.size(0)
+            accuracy_monitor.update(correct_num, sample_num)
+
             if criterion is not None:
                 loss = criterion(outputs, y)
-                correct_num = preds.eq(y).sum().item()
-                sample_num = x.size(0)
-                accuracy_monitor.update(correct_num, sample_num)
                 loss_monitor.update(loss.item(), x.size(0))
 
                 _tqdm.set_postfix(OrderedDict(stage="val", epoch=epoch, loss=loss_monitor.avg),
@@ -186,7 +198,7 @@ def validate_one_epoch(loader, model, criterion,epoch, device, mode, return_pred
     if not return_preds:
         preds,gt= None, None
 
-    return loss_monitor.avg, mae, preds, gt, all_std
+    return loss_monitor.avg, accuracy_monitor.avg, mae, preds, gt, all_std
 
 def build_sampler(dataset):
     """
@@ -223,7 +235,7 @@ def main():
         cfg.merge_from_list(args.opts)
 
     cfg.freeze()
-    u.set_seed(cfg.TRAIN.SEED)
+    #u.set_seed(cfg.TRAIN.SEED)
     start_epoch = 0
     checkpoint_dir = Path(args.checkpoint)
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -246,34 +258,25 @@ def main():
     # On charge AVANT d'envelopper le modèle avec DataParallel, pour pouvoir utiliser
     # _load_state_dict_into_model et accepter un checkpoint sauvegardé avec ou sans DataParallel.
     resume_path = args.resume
-    checkpoint = None  # gardé pour recharger le scheduler plus bas
-
+    
     if resume_path:
         if Path(resume_path).is_file():
             print("=> loading checkpoint '{}'".format(resume_path))
             checkpoint = torch.load(resume_path, map_location="cpu")
-            start_epoch = checkpoint['epoch']  # prochain epoch à exécuter
-            u._load_state_dict_into_model(model, checkpoint['state_dict'])  # gère le préfixe "module." si besoin
+            start_epoch = checkpoint['epoch']
+            model.load_state_dict(checkpoint['state_dict'])
             print("=> loaded checkpoint '{}' (epoch {})"
                   .format(resume_path, checkpoint['epoch']))
-            if 'optimizer_state_dict' in checkpoint:
-                optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-            # Restaurer best_val_mae évite d'écraser best.pth avec un modèle moins bon après reprise
-            if 'best_val_mae' in checkpoint:
-                best_val_mae = checkpoint['best_val_mae']
-            else:
-                best_val_mae = 10000.0
+            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         else:
             print("=> no checkpoint found at '{}'".format(resume_path))
-            best_val_mae = 10000.0
-    else:
-        best_val_mae = 10000.0
 
     if args.multi_gpu:
         model = nn.DataParallel(model)
 
     if device == "cuda":
         cudnn.benchmark = True
+
 
     # choix de la methode de calcul de la loss, modifier la méthode ds defaults.py
     criterion = get_criterion(cfg.MODEL.METHOD, alpha=0.5, device=device)
@@ -306,17 +309,14 @@ def main():
     scheduler = StepLR(optimizer, step_size=cfg.TRAIN.LR_DECAY_STEP, gamma=cfg.TRAIN.LR_DECAY_RATE,
                        last_epoch=start_epoch - 1)
     
-    if checkpoint is not None and 'scheduler_state_dict' in checkpoint:
-        scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
-        print("=> loaded scheduler state from checkpoint")
-    
+    best_val_mae = 10000.0
     train_writer = None
-    
+
     if args.tensorboard is not None:
         opts_prefix = "_".join(args.opts)
         train_writer = SummaryWriter(log_dir=args.tensorboard + "/" + opts_prefix + "_train")
         val_writer = SummaryWriter(log_dir=args.tensorboard + "/" + opts_prefix + "_val")
-
+    
     history = {
         "name": f"{cfg.MODEL.ARCH}-{cfg.MODEL.METHOD}",
         "train_loss": [],
@@ -329,13 +329,13 @@ def main():
 
     all_std=[]
     for epoch in range(start_epoch, cfg.TRAIN.EPOCHS):
-        train_loss,  train_acc= train_one_epoch(train_loader, model, criterion, optimizer, epoch, device, mode=cfg.MODEL.METHOD, is_train=True)
-        val_loss, val_mae, val_acc,preds,gt,std = validate_one_epoch(val_loader, model, criterion, None, epoch, device, mode=cfg.MODEL.METHOD, is_train=False)
+        train_loss,  train_acc, train_mae= train_one_epoch(train_loader, model, criterion, optimizer, epoch, device, mode=cfg.MODEL.METHOD)
+        val_loss, val_acc, val_mae,preds,gt,std = validate_one_epoch(val_loader, model, criterion, epoch, device, mode=cfg.MODEL.METHOD)
 
         
         if args.tensorboard is not None:
             train_writer.add_scalar("loss", train_loss, epoch)
-            #train_writer.add_scalar("mae", train_mae, epoch)
+            train_writer.add_scalar("mae", train_mae, epoch)
             train_writer.add_scalar("acc", train_acc, epoch)
             val_writer.add_scalar("loss", val_loss, epoch)
             val_writer.add_scalar("acc", val_acc, epoch)
@@ -344,54 +344,37 @@ def main():
         # ===== save history =====
         history["train_loss"].append(train_loss)
         history["val_loss"].append(val_loss)
-        #history["train_mae"].append(train_mae)
+        history["train_mae"].append(train_mae)
         history["val_mae"].append(val_mae)
         history["train_acc"].append(train_acc)
         history["val_acc"].append(val_acc)
 
-        # adjust learning rate
-        scheduler.step()
-        # ----- Checkpoint "best" : un seul fichier best.pth (on écrase l'ancien) -----
-        # Évite de remplir le disque (surtout sur Colab). On ne garde que le meilleur modèle selon val MAE.
-        if val_mae < best_val_mae:
-            if cfg.MC_DROPOUT or cfg.TTA >0 :
+        if cfg.MC_DROPOUT or cfg.TTA >0 :
                 all_std.append(std)
+
+        if val_mae < best_val_mae:
+            
             print(f"=> [epoch {epoch:03d}] best val mae was improved from {best_val_mae:.3f} to {val_mae:.3f}")
-            best_val_mae = val_mae
             model_state_dict = model.module.state_dict() if args.multi_gpu else model.state_dict()
             torch.save(
                 {
                     'epoch': epoch + 1,
                     'arch': cfg.MODEL.ARCH,
                     'state_dict': model_state_dict,
-                    'optimizer_state_dict': optimizer.state_dict(),
-                    'scheduler_state_dict': scheduler.state_dict(),
-                    'best_val_mae': best_val_mae,
+                    'optimizer_state_dict': optimizer.state_dict()
                 },
-                str(checkpoint_dir / "best.pth")
+                str(checkpoint_dir.joinpath("epoch{:03d}_{:.5f}_{:.4f}.pth".format(epoch, val_loss, val_mae)))
             )
-
-        # ----- Checkpoint "last" : à chaque fin d'epoch -----
-        # Permet de reprendre avec --resume au bon epoch (modèle + optimizer + scheduler + best_val_mae).
-        # Indispensable après une déconnexion Colab : on relance avec --resume checkpoint/last.pth
-        # (en pointant le dossier sur Drive) et l'entraînement continue au lieu de repartir de zéro.
-        model_state_dict = model.module.state_dict() if args.multi_gpu else model.state_dict()
-        torch.save(
-            {
-                'epoch': epoch + 1,
-                'arch': cfg.MODEL.ARCH,
-                'state_dict': model_state_dict,
-                'optimizer_state_dict': optimizer.state_dict(),
-                'scheduler_state_dict': scheduler.state_dict(),
-                'best_val_mae': best_val_mae,
-            },
-            str(checkpoint_dir / "last.pth")
-        )
-
-        if val_mae >= best_val_mae:
+            best_val_mae = val_mae
+        else:
             print(f"=> [epoch {epoch:03d}] best val mae was not improved from {best_val_mae:.3f} ({val_mae:.3f})")
 
 
+
+         # adjust learning rate
+        scheduler.step()
+
+        
     print("=> training finished")
     print(f"additional opts: {args.opts}")
     print(f"best val mae: {best_val_mae:.3f}")
@@ -413,5 +396,3 @@ def main():
 if __name__ == '__main__':
     main()
 
-
-# verifier le code de base 

@@ -4,9 +4,15 @@ _C = CN()
 
 # Model
 _C.MODEL = CN()
-# Backbone : python train.py -h liste les noms. Ex. se_resnext50_32x4d, resnet18, resnet50, etc.
-#_C.MODEL.ARCH = "se_resnext50_32x4d"
-_C.MODEL.ARCH = "se_resnext50_32x4d"
+# Backbone : python train.py -h liste les noms. Ex. seresnext50_32x4d, resnet18, resnet50, etc.
+#_C.MODEL.ARCH = "seresnext50_32x4d"
+"""
+seresnet50
+resnet101
+seresnext50_32x4d
+resnext50_32x4d
+"""
+_C.MODEL.ARCH = "seresnext50_32x4d"
 _C.MODEL.IMG_SIZE = 224
 _C.MODEL.METHOD = "laplace"  # "dex" "weightLoss" "balancedSoftmax" "laplace", "none" "gaussian" ou "residual" pour comparer les deux (même config recommandée)
 _C.MODEL.LABEL_SMOOTHING = 0.  # 0.1 souvent bénéfique pour la généralisation (classification)

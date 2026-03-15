@@ -108,8 +108,8 @@ def read_scalars(log_dir, tag):
 
     events = ea.Scalars(tag)
     values = [e.value for e in events]
-
-    return values[len(values)-cfg.TRAIN.EPOCHS -1:]
+    print("Nb events:", len(values))
+    return values
 
 # =========================================================
 # Superposer deux méthodes sur le même graphique
@@ -197,9 +197,7 @@ def plot_uncertainty_by_age(all_std, val_dataset, save_path="Images/uncertainty_
     plt.show()
 
     print(f"=> Graphique d'incertitude par âge enregistré sous {save_path}")
-import os
-import numpy as np
-import matplotlib.pyplot as plt
+
 
 def plot_uncertainty(predictions, targets, std_values, save_dir="Images"):
     """
@@ -260,15 +258,21 @@ def main():
         gaus_train = logdir / "n_MODEL.METHOD_gaussian_train"
         gaus_val   = logdir / "n_MODEL.METHOD_gaussian_val"
         
-        #none_train = logdir / "MODEL.METHOD_none_train"
-        #none_val   = logdir / "MODEL.METHOD_none_val"
-        residual_train = logdir / "n_MODEL.METHOD_residual_train"
-        residual_val   = logdir / "n_MODEL.METHOD_residual_val"
-        
+        none_train = logdir / "nn_MODEL.METHOD_none_train"
+        none_val   = logdir / "nn_MODEL.METHOD_none_val"
+
+        residual_train = logdir / "MODEL.METHOD_dex_TRAIN.LR_0.1_train"
+        residual_val   = logdir / "MODEL.METHOD_dex_TRAIN.LR_0.1_val"
         plot_two_methods(   
-            train_logs=[dex_train, lap_train, gaus_train, residual_train],
-            val_logs=[dex_val, lap_val, gaus_val,  residual_val],
-            names=["DEX", "Laplace", "Gaussian", "Residual"],
+            train_logs=[residual_train],
+            val_logs=[ residual_val],
+            names=["Residual"],
+            title=args.title
+        )
+        plot_two_methods(   
+            train_logs=[dex_train, lap_train, gaus_train,none_train, residual_train],
+            val_logs=[dex_val, lap_val, gaus_val,none_val,  residual_val],
+            names=["DEX", "Laplace", "Gaussian","none", "Residual"],
             title=args.title
         )
         """
