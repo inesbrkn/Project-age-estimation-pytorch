@@ -109,7 +109,7 @@ def read_scalars(log_dir, tag):
     events = ea.Scalars(tag)
     values = [e.value for e in events]
 
-    return values[len(values)-cfg.TRAIN.EPOCHS:]
+    return values[len(values)-cfg.TRAIN.EPOCHS+10:]
 
 # =========================================================
 # Superposer deux méthodes sur le même graphique
@@ -130,11 +130,11 @@ def plot_two_methods(train_logs, val_logs, names, title=None, save_path=None):
     # Loss subplot
     plt.subplot(1,2,1)
     for t_log,v_log,  name in zip(train_logs,val_logs, names):
-        train_loss = read_scalars(t_log, "loss")
-        #val_loss = read_scalars(v_log, "loss")
-        epochs = np.arange(1, len(train_loss)+1)
-        plt.plot(epochs, train_loss, linestyle="--", label=f"{name} train")
-        #plt.plot(epochs, val_loss, linestyle="-", label=f"{name} val")
+        #train_loss = read_scalars(t_log, "loss")
+        val_loss = read_scalars(v_log, "loss")
+        epochs = np.arange(1, len(val_loss)+1)
+        #plt.plot(epochs, train_loss, linestyle="--", label=f"{name} train")
+        plt.plot(epochs, val_loss, linestyle="-", label=f"{name} val")
     plt.xlabel("Epoch")
     plt.ylabel("Loss")
     plt.title("Loss comparison")
@@ -144,11 +144,11 @@ def plot_two_methods(train_logs, val_logs, names, title=None, save_path=None):
     # Acc subplot
     plt.subplot(1,2,2)
     for t_log, v_log, name in zip(train_logs, val_logs, names):
-        train_acc = read_scalars(t_log, "acc")
-        #val_acc = read_scalars(v_log, "acc")
-        epochs = np.arange(1, len(train_acc)+1)
-        plt.plot(epochs, train_acc, linestyle="--", label=f"{name} train")
-        #plt.plot(epochs, val_acc, linestyle="-", label=f"{name} val")
+        #train_acc = read_scalars(t_log, "acc")
+        val_acc = read_scalars(v_log, "acc")
+        epochs = np.arange(1, len(val_acc)+1)
+        #plt.plot(epochs, train_acc, linestyle="--", label=f"{name} train")
+        plt.plot(epochs, val_acc, linestyle="-", label=f"{name} val")
     plt.xlabel("Epoch")
     plt.ylabel("ACCURACY")
     plt.title("ACCURACY comparison")
@@ -263,13 +263,13 @@ def main():
         none_train = logdir / "essayeMODEL.METHOD_none_train"
         none_val   = logdir / "essayeMODEL.METHOD_none_val"
 
-        residual_train = logdir / "MODEL.METHOD_dex_TRAIN.LR_0.1_train"
-        residual_val   = logdir / "MODEL.METHOD_dex_TRAIN.LR_0.1_val"
+        residual_train = logdir / "essayeMODEL.METHOD_residual_train"
+        residual_val   = logdir / "essayeMODEL.METHOD_residual_val"
 
         plot_two_methods(   
-            train_logs=[dex_train, lap_train, gaus_train,none_train],
-            val_logs=[dex_val, lap_val, gaus_val,none_val],
-            names=["DEX", "Laplace", "Gaussian","none"],
+            train_logs=[dex_train, lap_train, gaus_train,none_train, residual_train],
+            val_logs=[dex_val, lap_val, gaus_val,none_val, residual_train],
+            names=["DEX", "Laplace", "Gaussian","none", "residual"],
             title=args.title
         )
         """
