@@ -258,14 +258,14 @@ def main():
         gaus_train = logdir / "n_MODEL.METHOD_gaussian_train"
         gaus_val   = logdir / "n_MODEL.METHOD_gaussian_val"
         
-        none_train = logdir / "nn_MODEL.METHOD_none_train"
-        none_val   = logdir / "nn_MODEL.METHOD_none_val"
+        none_train = logdir / "essaye_MODEL.METHOD_none_train"
+        none_val   = logdir / "essaye_MODEL.METHOD_none_val"
 
         residual_train = logdir / "MODEL.METHOD_dex_TRAIN.LR_0.1_train"
         residual_val   = logdir / "MODEL.METHOD_dex_TRAIN.LR_0.1_val"
         plot_two_methods(   
-            train_logs=[residual_train],
-            val_logs=[ residual_val],
+            train_logs=[none_train,residual_train],
+            val_logs=[ none_val, residual_val],
             names=["Residual"],
             title=args.title
         )

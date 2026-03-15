@@ -13,10 +13,8 @@ import pretrainedmodels.utils
 from model import get_model2
 from dataset import FaceDataset
 from defaults import _C as cfg
-from train import mae_by_age_group, run_epoch, get_criterion
-
-
-
+from train import mae_by_age_group
+from train import validate_one_epoch
 
 def get_args():
     model_names = sorted(name for name in pretrainedmodels.__dict__
@@ -65,10 +63,9 @@ def main():
     test_loader = DataLoader(test_dataset, batch_size=cfg.TEST.BATCH_SIZE, shuffle=False,
                              num_workers=cfg.TRAIN.WORKERS, drop_last=False)
 
-    criterion = get_criterion(cfg.MODEL.METHOD, alpha=0.5, device=device)
     print("=> start testing")
    
-    test_loss, test_mae, test_acc, preds, gt, std = run_epoch(test_loader,model,criterion,None,0,device,mode=cfg.MODEL.METHOD,is_train=False, return_preds=True)    
+    test_loss, test_acc, test_mae, preds,gt,std = validate_one_epoch(test_loader, model, None, 0, device, mode=cfg.MODEL.METHOD, return_preds=True)
     if cfg.MC_DROPOUT or cfg.TTA > 0:
         plot_uncertainty(preds, gt, std)
 
