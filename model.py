@@ -18,9 +18,10 @@ def compute_predictions(outputs, mode, device):
             predicted = age_est.round().clamp(0, 100).long()
             return predicted
     elif mode == "residual":
-
-        cls_logits, residual = outputs
-        predicted = cls_logits.argmax(1)
+        logits, residual = outputs
+        ages = torch.arange(0, 101, device=device).float()
+        probs = F.softmax(logits, dim=-1)
+        predicted = (probs * ages).sum(dim=1)
         pred_age = predicted.float() + residual.squeeze()
 
         return pred_age
@@ -28,6 +29,7 @@ def compute_predictions(outputs, mode, device):
     elif mode in ["gaussian", "laplace"]:
         mu, _ = outputs
         return mu.squeeze(-1).clamp(0, 100)
+        
     elif  mode == "none" : 
         return outputs.argmax(1).float()
     else:
@@ -63,16 +65,6 @@ def tta_predict2(model, x, mode, device, n_aug=5):
     return mean_pred, std_pred
 
 def tta_predict(model, x, mode, device):
-    """
-    Test-Time Augmentation robuste.
-
-    x : tensor [B, C, H, W]
-
-    Returns
-    -------
-    mean_pred : moyenne des prédictions
-    std_pred  : incertitude (écart-type)
-    """
 
     tta_transforms = [
         lambda img: img,  # original
@@ -98,7 +90,7 @@ def tta_predict(model, x, mode, device):
 
         preds.append(pred)
 
-    preds = torch.stack(preds)  # [TTA, B, classes]
+    preds = torch.stack(preds) 
 
     mean_pred = preds.mean(0)
     std_pred = preds.std(0)

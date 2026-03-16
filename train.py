@@ -99,11 +99,8 @@ def train_one_epoch(loader, model, criterion, optimizer, epoch, device, mode):
 
             outputs = model(x)
             loss = criterion(outputs, y)
-
-            predicted = outputs[0].argmax(1) if mode == "residual" else outputs.argmax(1)
-
-            pred= compute_predictions(outputs, mode, device)
-          
+            pred = compute_predictions(outputs, mode, device)
+            predicted = pred.round().long()
 
             correct_num = (predicted == y).sum().item()
             sample_num = x.size(0)
@@ -171,9 +168,8 @@ def validate_one_epoch(loader, model, criterion,epoch, device, mode, return_pred
             else:
                 preds.append(compute_predictions(outputs, mode, device).cpu().numpy())
 
-
-            predicted = outputs[0].argmax(1) if mode == "residual" else outputs.argmax(1)
-
+            pred = compute_predictions(outputs, mode, device)
+            predicted = pred.round().long()
             correct_num = (predicted == y).sum().item()
             sample_num = x.size(0)
             accuracy_monitor.update(correct_num, sample_num)
