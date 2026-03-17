@@ -306,6 +306,11 @@ def get_model2(
             p_dropout=p_dropout,
         )
 
+    elif method == "ordinal":
+        # Ordinal regression : pour K classes (0..K-1), on prédit K-1 sorties binaires \"age > k ?\"
+        num_thresholds = num_classes - 1
+        base_model.last_linear = nn.Linear(dim_feats, num_thresholds)
+        return base_model
     # =========================
     # fallback
     # =========================
