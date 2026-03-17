@@ -15,8 +15,8 @@ def compute_predictions(outputs, mode, device):
             # age estimé = somme des probabilités sigmoid(logits)
             probs = torch.sigmoid(logits)
             age_est = probs.sum(dim=1)
-            predicted = age_est.round().clamp(0, 100).long()
-            return predicted
+            #predicted = age_est.round().clamp(0, 100).long()
+            return age_est
     elif mode == "residual":
         logits, residual = outputs
         ages = torch.arange(0, 101, device=device).float()
@@ -63,7 +63,7 @@ def tta_predict2(model, x, mode, device, n_aug=5):
     std_pred = preds.std(0)
 
     return mean_pred, std_pred
-
+"""
 def tta_predict(model, x, mode, device):
 
     tta_transforms = [
@@ -96,7 +96,54 @@ def tta_predict(model, x, mode, device):
     std_pred = preds.std(0)
 
     return mean_pred, std_pred
+"""
 
+def tta_predict(model, x, mode, device):
+    """
+    Test Time Augmentation pour estimation d'âge.
+    Retourne :
+        mean_pred : prédiction moyenne
+        std_pred  : incertitude (écart-type)
+    """
+
+    model.eval()
+
+    tta_transforms = [
+        lambda img: img,  # original
+        lambda img: torch.flip(img, dims=[3]),  # horizontal flip
+        lambda img: F.interpolate(img, scale_factor=0.95, mode="bilinear", align_corners=False),  # zoom out
+        lambda img: F.interpolate(img, scale_factor=1.05, mode="bilinear", align_corners=False),  # zoom in
+    ]
+
+    preds = []
+
+    with torch.no_grad():
+
+        for t in tta_transforms:
+
+            x_aug = t(x)
+
+            # si le resize change la taille, on remet la taille originale
+            if x_aug.shape[-2:] != x.shape[-2:]:
+                x_aug = F.interpolate(
+                    x_aug,
+                    size=x.shape[-2:],
+                    mode="bilinear",
+                    align_corners=False
+                )
+
+            outputs = model(x_aug)
+
+            pred = compute_predictions(outputs, mode, device)
+
+            preds.append(pred)
+
+    preds = torch.stack(preds)   # [n_aug, batch]
+
+    mean_pred = preds.mean(0)
+    std_pred = preds.std(0)
+
+    return mean_pred, std_pred
 # =====================================================
 # Residual Model
 # =====================================================

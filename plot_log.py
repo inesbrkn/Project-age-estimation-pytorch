@@ -139,7 +139,7 @@ def read_scalars(log_dir, tag):
     events = ea.Scalars(tag)
     values = [e.value for e in events]
 
-    return values[len(values)-cfg.TRAIN.EPOCHS+5:]
+    return values[len(values)-cfg.TRAIN.EPOCHS:]
 
 # =========================================================
 # Superposer deux méthodes sur le même graphique
@@ -154,16 +154,13 @@ def plot_two_methods(train_logs, val_logs, names, title=None, save_path=None):
 
     from tensorboard.backend.event_processing import event_accumulator
 
-    ea = event_accumulator.EventAccumulator("tf_log/MODEL.METHOD_none_val")
-    ea.Reload()
-    print(ea.Tags()["scalars"])
     # Loss subplot
     plt.subplot(1,2,1)
     for t_log,v_log,  name in zip(train_logs,val_logs, names):
         train_loss = read_scalars(t_log, "loss")
         val_loss = read_scalars(v_log, "loss")
         epochs = np.arange(1, len(train_loss)+1)
-        #plt.plot(epochs, train_loss, linestyle="--", label=f"{name} train")
+        plt.plot(epochs, train_loss, linestyle="--", label=f"{name} train")
         plt.plot(epochs, val_loss, linestyle="-", label=f"{name} val")
     plt.xlabel("Epoch")
     plt.ylabel("Loss")
@@ -177,7 +174,7 @@ def plot_two_methods(train_logs, val_logs, names, title=None, save_path=None):
         train_acc = read_scalars(t_log, "mae")
         val_acc = read_scalars(v_log, "mae")
         epochs = np.arange(1, len(train_acc)+1)
-        #plt.plot(epochs, train_acc, linestyle="--", label=f"{name} train")
+        plt.plot(epochs, train_acc, linestyle="--", label=f"{name} train")
         plt.plot(epochs, val_acc, linestyle="-", label=f"{name} val")
     plt.xlabel("Epoch")
     plt.ylabel("MAE")
@@ -275,24 +272,29 @@ def main():
     args = parser.parse_args()
 
     logdir = Path(args.logdir)
-
-    # Exemple de MAE pour chaque modèle (à remplacer par tes valeurs réelles)
-    mae_laplace = [4.805, 4.832, 4.920, 4.997, 4.6]
-    model_names = ["EfficientNet-B0", "EfficientNet-B3", "SEResNet50", "ResNet101", "SEResNet50_32xd"]
-
-    # Appel de la fonction
-    plot_mae_bar(mae_values=mae_laplace, model_names=model_names, 
-                title="MAE on Laplace Function by Model", 
-                filename="laplace_mae_models.png")
+    
     if args.compare:
+        dex_train = logdir / "dMODEL.METHOD_dex_train"
+        dex_val   = logdir / "dMODEL.METHOD_dex_val"
+        dex_train3e4 = logdir / "MODEL.METHOD_dex_TRAIN.LR_3e4_MODEL.ARCH_efficientnet_b3_train"
+        dex_val3e4  = logdir / "MODEL.METHOD_dex_TRAIN.LR_3e4_MODEL.ARCH_efficientnet_b3_val"
+        dex_train1e4 = logdir / "MODEL.METHOD_dex_TRAIN.LR_1e4_MODEL.ARCH_efficientnet_b3_train"
+        dex_val1e4   = logdir / "MODEL.METHOD_dex_TRAIN.LR_1e4_MODEL.ARCH_efficientnet_b3_val"
         
+        plot_two_methods(   
+            train_logs=[dex_train3e4, dex_train1e4, dex_train],
+            val_logs=[dex_val3e4, dex_val1e4, dex_val],
+            names=["Dex LR 3e-4", "Dex LR 1e-4", "dex baseline"],
+            title=args.title
+        )
+        """ 
         dex_train = logdir / "dMODEL.METHOD_dex_train"
         dex_val   = logdir / "dMODEL.METHOD_dex_val"
         dex_train01 = logdir / "dMODEL.METHOD_dex_MODEL.LABEL_SMOOTHING_0.1_train"
         dex_val01   = logdir / "dMODEL.METHOD_dex_MODEL.LABEL_SMOOTHING_0.1_val"
         dex_train005 = logdir / "dMODEL.METHOD_dex_MODEL.LABEL_SMOOTHING_0.05_train"
         dex_val005   = logdir / "dMODEL.METHOD_dex_MODEL.LABEL_SMOOTHING_0.05_val"
-        """
+        
         plot_two_methods(   
             train_logs=[dex_train, dex_train01, dex_train005],
             val_logs=[dex_val,dex_val01, dex_val005],

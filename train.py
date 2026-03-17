@@ -229,9 +229,9 @@ def main():
 
     if args.opts:
         cfg.merge_from_list(args.opts)
-
+    cfg.MODEL.TASK = "classification"
     cfg.freeze()
-    #u.set_seed(cfg.TRAIN.SEED)
+    u.set_seed(cfg.TRAIN.SEED)
     start_epoch = 0
     checkpoint_dir = Path(args.checkpoint)
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -260,7 +260,8 @@ def main():
             print("=> loading checkpoint '{}'".format(resume_path))
             checkpoint = torch.load(resume_path, map_location="cpu")
             start_epoch = checkpoint['epoch']
-            model.load_state_dict(checkpoint['state_dict'])
+            u._load_state_dict_into_model(model, checkpoint["state_dict"])
+            #model.load_state_dict(checkpoint['state_dict'])
             print("=> loaded checkpoint '{}' (epoch {})"
                   .format(resume_path, checkpoint['epoch']))
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
@@ -278,7 +279,8 @@ def main():
     criterion = get_criterion(cfg.MODEL.METHOD, alpha=0.5, device=device)
 
     train_dataset = FaceDataset(args.data_dir, "train", img_size=cfg.MODEL.IMG_SIZE, augment=True,
-                                age_stddev=cfg.TRAIN.AGE_STDDEV)
+                                age_stddev=cfg.TRAIN.AGE_STDDEV, synth_dir=args.synth_dir,       # <--- NOUVEAU
+        synth_only=args.synth_only)
     
     if cfg.MODEL.balanced_sampler :
 
