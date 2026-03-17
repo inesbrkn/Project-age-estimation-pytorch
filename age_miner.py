@@ -18,7 +18,7 @@ PSEUDO_LBL_PATH = os.path.join(ROOT, "pseudo_labeler.py")
 # Chemins des fichiers de poids
 PKL_PATH = "/content/stylegan3-r-ffhqu-1024x1024.pkl"
 # ATTENTION : Vérifie si c'est bien 'best.pth' ou 'best_cls.pth' !
-CHECKPOINT_PTH = "/content/drive/MyDrive/age_estimation/checkpoints_run1/best.pth"
+CHECKPOINT_PTH = "/content/drive/MyDrive/age_estimation/checkpoints_ordinal/best_cls.pth"
 
 # Dossiers de stockage
 GAN_TEMP = "/content/gan_temp"
