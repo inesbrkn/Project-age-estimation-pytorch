@@ -1,9 +1,12 @@
+import numpy as np
+np.bool = bool
+
 import argparse
 import better_exceptions
 from pathlib import Path
 from collections import OrderedDict
 from tqdm import tqdm
-import numpy as np
+import os
 import torch
 import torch.nn as nn
 import torch.nn.parallel
@@ -16,10 +19,13 @@ import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 import pretrainedmodels
 import pretrainedmodels.utils
-from model import get_model
+from model import get_model2, mc_dropout_predict, compute_predictions, tta_predict, tta_predict2
+from losses import get_criterion
 from dataset import FaceDataset
 from defaults import _C as cfg
-
+import utils as u
+from plot_log import plot_training_curves, plot_uncertainty_by_age
+from torch.utils.data import WeightedRandomSampler
 
 def get_args():
     model_names = sorted(name for name in pretrainedmodels.__dict__
@@ -38,7 +44,6 @@ def get_args():
     args = parser.parse_args()
     return args
 
-
 """
 Sert à suivre la perte (loss) et la précision (accuracy) pendant l’entraînement et la validation.
 Permet de calculer la moyenne cumulée au fil des batches.
@@ -56,125 +61,186 @@ class AverageMeter(object):
         self.count += n
         self.avg = self.sum / self.count
 
+def mae_by_age_group(preds, gt, groups=None):
+    """
+    Calcule le MAE par tranche d'âge (ex. enfants 0-17, adultes 18-45, seniors 46+).
+    groups: liste de (min_age, max_age) inclus. Par défaut cfg.TEST.AGE_GROUPS.
+    Retourne une liste de dict avec 'name', 'mae', 'count', 'std' (écart-type des erreurs absolues).
+    """
+    if groups is None:
+        groups = cfg.TEST.AGE_GROUPS
+    preds = np.asarray(preds)
+    gt = np.asarray(gt)
+    errors = np.abs(preds - gt)
+    results = []
+    for low, high in groups:
+        mask = (gt >= low) & (gt <= high)
+        n = mask.sum()
+        if n == 0:
+            results.append({"name": f"{low}-{high}", "mae": np.nan, "count": 0, "std": np.nan})
+            continue
+        mae = errors[mask].mean()
+        std = errors[mask].std()
+        results.append({"name": f"{low}-{high}", "mae": float(mae), "count": int(n), "std": float(std)})
+    return results
 
-""" -- > Entraine le modèle
-
-1) Parcourt toutes les images du train_loader.
-
-2) Pour chaque batch :
-
-- Envoie les images et labels sur le GPU (x.to(device)).
-
-- Calcule la sortie du modèle (outputs = model(x)).
-
-- Calcule la loss (criterion(outputs, y)).
-
-- Calcule la précision du batch.
-
-- Fait la rétropropagation (loss.backward()) et met à jour les poids w et b en fonction de alpha et gradient calculé avec loss.backward(optimizer.step()).
-
-Affiche les statistiques en temps réel avec tqdm.
-
-Résultat : la loss et l’accuracy moyenne pour l’epoch.
-"""
-def train(train_loader, model, criterion, optimizer, epoch, device):
+def train_one_epoch(loader, model, criterion, optimizer, epoch, device, mode):
     model.train()
-    loss_monitor = AverageMeter()
-    accuracy_monitor = AverageMeter()
 
-    with tqdm(train_loader) as _tqdm:
-        for x, y in _tqdm:
-            x = x.to(device)
-            y = y.to(device)
-
-            # compute output
-            outputs = model(x)
-
-            # calc loss
-            loss = criterion(outputs, y)
-            cur_loss = loss.item()
-
-            # calc accuracy
-            _, predicted = outputs.max(1)
-            correct_num = predicted.eq(y).sum().item()
-
-            # measure accuracy and record loss
-            sample_num = x.size(0)
-            loss_monitor.update(cur_loss, sample_num)
-            accuracy_monitor.update(correct_num, sample_num)
-
-            # compute gradient and do SGD step
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-
-            _tqdm.set_postfix(OrderedDict(stage="train", epoch=epoch, loss=loss_monitor.avg),
-                              acc=accuracy_monitor.avg, correct=correct_num, sample_num=sample_num)
-
-    return loss_monitor.avg, accuracy_monitor.avg
-
-
-# meme chose que train mais elle calcule MAE 
-def validate(validate_loader, model, criterion, epoch, device):
-    model.eval()
-    loss_monitor = AverageMeter()
-    accuracy_monitor = AverageMeter()
+    loss_meter = AverageMeter()
+    acc_meter = AverageMeter()
     preds = []
     gt = []
 
-    with torch.no_grad():
-        with tqdm(validate_loader) as _tqdm:
-            for i, (x, y) in enumerate(_tqdm):
-                x = x.to(device)
-                y = y.to(device)
+    with torch.enable_grad(), tqdm(loader) as _tqdm:
+        for x, y in _tqdm:
+            x = x.to(device, non_blocking=True)
+            y = y.to(device, non_blocking=True)
 
-                # compute output
-                outputs = model(x)
-                preds.append(F.softmax(outputs, dim=-1).cpu().numpy())
-                gt.append(y.cpu().numpy())
+            outputs = model(x)
+            loss = criterion(outputs, y)
+            pred = compute_predictions(outputs, mode, device)
+            predicted = pred.round().long()
 
-                # valid for validation, not used for test
-                if criterion is not None:
-                    # calc loss
-                    loss = criterion(outputs, y)
-                    cur_loss = loss.item()
+            correct_num = (predicted == y).sum().item()
+            sample_num = x.size(0)
+            
+            loss_meter.update(loss.item(), sample_num )
+            acc_meter.update(correct_num,sample_num)
 
-                    # calc accuracy
-                    _, predicted = outputs.max(1)
-                    correct_num = predicted.eq(y).sum().item()
+    
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            gt.append(y.cpu().numpy())
+            preds.append(pred.detach().cpu().numpy())
+            _tqdm.set_postfix(
+                OrderedDict(
+                    stage="train",
+                    epoch=epoch,
+                    loss=f"{loss_meter.avg:.4f}",
+                    accN=f"{acc_meter.avg:.4f}",
+                )
+            )
 
-                    # measure accuracy and record loss
-                    sample_num = x.size(0)
-                    loss_monitor.update(cur_loss, sample_num)
-                    accuracy_monitor.update(correct_num, sample_num)
-                    _tqdm.set_postfix(OrderedDict(stage="val", epoch=epoch, loss=loss_monitor.avg),
+    preds = np.concatenate(preds)
+    gt = np.concatenate(gt)
+
+    mae = np.abs(preds - gt).mean()
+    return loss_meter.avg, acc_meter.avg, mae
+
+def validate_one_epoch(loader, model, criterion,epoch, device, mode, return_preds=False):
+    model.eval()
+
+    loss_monitor = AverageMeter()
+    accuracy_monitor = AverageMeter()
+
+    preds = []
+    gt = []
+    all_std = []
+
+    with torch.no_grad(), tqdm(loader) as _tqdm:
+        for x, y in _tqdm:
+            x = x.to(device, non_blocking=True)
+            y = y.to(device, non_blocking=True)
+
+            outputs = model(x)
+
+            if cfg.TTA > 0:
+
+                if cfg.TTA == 1:
+                    mean_pred, std_pred = tta_predict(model, x, mode, device)
+                else:
+                    mean_pred, std_pred = tta_predict2(model, x, mode, device)
+
+                preds.append(mean_pred.cpu().numpy())
+                all_std.append(std_pred.detach().cpu())
+
+            elif cfg.MC_DROPOUT:
+
+                mean_pred, std_pred = mc_dropout_predict(
+                    model, x, mode, device, n_samples=30
+                )
+
+                preds.append(mean_pred.cpu().numpy())
+                all_std.append(std_pred.detach().cpu())
+
+            else:
+                preds.append(compute_predictions(outputs, mode, device).cpu().numpy())
+
+            pred = compute_predictions(outputs, mode, device)
+            predicted = pred.round().long()
+            correct_num = (predicted == y).sum().item()
+            sample_num = x.size(0)
+            accuracy_monitor.update(correct_num, sample_num)
+
+            if criterion is not None:
+                loss = criterion(outputs, y)
+                loss_monitor.update(loss.item(), x.size(0))
+
+                _tqdm.set_postfix(OrderedDict(stage="val", epoch=epoch, loss=loss_monitor.avg),
                                       acc=accuracy_monitor.avg, correct=correct_num, sample_num=sample_num)
 
-    preds = np.concatenate(preds, axis=0)
-    gt = np.concatenate(gt, axis=0)
-    ages = np.arange(0, 101)
-    ave_preds = (preds * ages).sum(axis=-1)
-    diff = ave_preds - gt
-    mae = np.abs(diff).mean()
+            gt.append(y.cpu().numpy())
 
-    return loss_monitor.avg, accuracy_monitor.avg, mae
+    preds = np.concatenate(preds)
+    gt = np.concatenate(gt)
 
+    mae = np.abs(preds - gt).mean()
+
+    if cfg.MC_DROPOUT or cfg.TTA > 0:
+        all_std = torch.cat(all_std).numpy()
+
+    if not return_preds:
+        preds,gt= None, None
+
+    return loss_monitor.avg, accuracy_monitor.avg, mae, preds, gt, all_std
+
+def build_sampler(dataset):
+    """
+    Crée un sampler pondéré pour équilibrer les âges.
+    Utilise les âges directement depuis le dataset pour éviter un IndexError.
+    """
+    # récupère les âges depuis le dataset
+    ages = []
+    for i in range(len(dataset)):
+        _, age = dataset[i]  # FaceDataset.__getitem__ retourne (image, age)
+        ages.append(age)
+
+    ages = torch.tensor(ages).long()
+
+    # compte le nombre d’occurrences de chaque âge
+    counts = torch.bincount(ages, minlength=101)  # suppose que l’âge max est 100
+
+    # poids inversement proportionnels à la fréquence
+    weights = 1.0 / counts
+    sample_weights = weights[ages]
+
+    sampler = WeightedRandomSampler(
+        weights=sample_weights,
+        num_samples=len(sample_weights),
+        replacement=True
+    )
+
+    return sampler
 
 def main():
     args = get_args()
 
     if args.opts:
         cfg.merge_from_list(args.opts)
-
+    cfg.MODEL.TASK = "classification"
     cfg.freeze()
+    u.set_seed(cfg.TRAIN.SEED)
     start_epoch = 0
     checkpoint_dir = Path(args.checkpoint)
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     # create model
     print("=> creating model '{}'".format(cfg.MODEL.ARCH))
-    model = get_model(model_name=cfg.MODEL.ARCH)
+    model = get_model2(model_name=cfg.MODEL.ARCH, method=cfg.MODEL.METHOD)
 
+    # choisi l'optimizer 
     if cfg.TRAIN.OPT == "sgd":
         optimizer = torch.optim.SGD(model.parameters(), lr=cfg.TRAIN.LR,
                                     momentum=cfg.TRAIN.MOMENTUM,
@@ -184,16 +250,18 @@ def main():
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = model.to(device)
-
-    # optionally resume from a checkpoint
+    # ----- Reprise depuis un checkpoint (--resume) -----
+    # On charge AVANT d'envelopper le modèle avec DataParallel, pour pouvoir utiliser
+    # _load_state_dict_into_model et accepter un checkpoint sauvegardé avec ou sans DataParallel.
     resume_path = args.resume
-
+    
     if resume_path:
         if Path(resume_path).is_file():
             print("=> loading checkpoint '{}'".format(resume_path))
             checkpoint = torch.load(resume_path, map_location="cpu")
             start_epoch = checkpoint['epoch']
-            model.load_state_dict(checkpoint['state_dict'])
+            u._load_state_dict_into_model(model, checkpoint["state_dict"])
+            #model.load_state_dict(checkpoint['state_dict'])
             print("=> loaded checkpoint '{}' (epoch {})"
                   .format(resume_path, checkpoint['epoch']))
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
@@ -206,18 +274,39 @@ def main():
     if device == "cuda":
         cudnn.benchmark = True
 
-    criterion = nn.CrossEntropyLoss().to(device)
+
+    # choix de la methode de calcul de la loss, modifier la méthode ds defaults.py
+    criterion = get_criterion(cfg.MODEL.METHOD, alpha=0.5, device=device)
+
     train_dataset = FaceDataset(args.data_dir, "train", img_size=cfg.MODEL.IMG_SIZE, augment=True,
-                                age_stddev=cfg.TRAIN.AGE_STDDEV)
-    train_loader = DataLoader(train_dataset, batch_size=cfg.TRAIN.BATCH_SIZE, shuffle=True,
+                                age_stddev=cfg.TRAIN.AGE_STDDEV, synth_dir=args.synth_dir,       # <--- NOUVEAU
+        synth_only=args.synth_only)
+    
+    if cfg.MODEL.balanced_sampler :
+
+        sampler = build_sampler(train_dataset)
+
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=cfg.TRAIN.BATCH_SIZE,
+            sampler=sampler,      # sampler remplace shuffle
+            shuffle=False,
+            num_workers=cfg.TRAIN.WORKERS,
+            drop_last=True
+        )
+
+    else:
+        train_loader = DataLoader(train_dataset, batch_size=cfg.TRAIN.BATCH_SIZE, shuffle=True,
                               num_workers=cfg.TRAIN.WORKERS, drop_last=True)
 
     val_dataset = FaceDataset(args.data_dir, "valid", img_size=cfg.MODEL.IMG_SIZE, augment=False)
     val_loader = DataLoader(val_dataset, batch_size=cfg.TEST.BATCH_SIZE, shuffle=False,
                             num_workers=cfg.TRAIN.WORKERS, drop_last=False)
 
+    # Pour que le learning rate diminue pendant l'entrainement
     scheduler = StepLR(optimizer, step_size=cfg.TRAIN.LR_DECAY_STEP, gamma=cfg.TRAIN.LR_DECAY_RATE,
                        last_epoch=start_epoch - 1)
+    
     best_val_mae = 10000.0
     train_writer = None
 
@@ -225,23 +314,44 @@ def main():
         opts_prefix = "_".join(args.opts)
         train_writer = SummaryWriter(log_dir=args.tensorboard + "/" + opts_prefix + "_train")
         val_writer = SummaryWriter(log_dir=args.tensorboard + "/" + opts_prefix + "_val")
+    
+    history = {
+        "name": f"{cfg.MODEL.ARCH}-{cfg.MODEL.METHOD}",
+        "train_loss": [],
+        "val_loss": [],
+        "train_mae": [],
+        "val_mae": [],
+        "train_acc": [],
+        "val_acc": [],
+    }
 
+    all_std=[]
     for epoch in range(start_epoch, cfg.TRAIN.EPOCHS):
-        # train
-        train_loss, train_acc = train(train_loader, model, criterion, optimizer, epoch, device)
+        train_loss,  train_acc, train_mae= train_one_epoch(train_loader, model, criterion, optimizer, epoch, device, mode=cfg.MODEL.METHOD)
+        val_loss, val_acc, val_mae,preds,gt,std = validate_one_epoch(val_loader, model, criterion, epoch, device, mode=cfg.MODEL.METHOD)
 
-        # validate
-        val_loss, val_acc, val_mae = validate(val_loader, model, criterion, epoch, device)
-
+        
         if args.tensorboard is not None:
             train_writer.add_scalar("loss", train_loss, epoch)
+            train_writer.add_scalar("mae", train_mae, epoch)
             train_writer.add_scalar("acc", train_acc, epoch)
             val_writer.add_scalar("loss", val_loss, epoch)
             val_writer.add_scalar("acc", val_acc, epoch)
             val_writer.add_scalar("mae", val_mae, epoch)
 
-        # checkpoint
+        # ===== save history =====
+        history["train_loss"].append(train_loss)
+        history["val_loss"].append(val_loss)
+        history["train_mae"].append(train_mae)
+        history["val_mae"].append(val_mae)
+        history["train_acc"].append(train_acc)
+        history["val_acc"].append(val_acc)
+
+        if cfg.MC_DROPOUT or cfg.TTA >0 :
+                all_std.append(std)
+
         if val_mae < best_val_mae:
+            
             print(f"=> [epoch {epoch:03d}] best val mae was improved from {best_val_mae:.3f} to {val_mae:.3f}")
             model_state_dict = model.module.state_dict() if args.multi_gpu else model.state_dict()
             torch.save(
@@ -257,13 +367,30 @@ def main():
         else:
             print(f"=> [epoch {epoch:03d}] best val mae was not improved from {best_val_mae:.3f} ({val_mae:.3f})")
 
-        # adjust learning rate
+
+
+         # adjust learning rate
         scheduler.step()
 
+        
     print("=> training finished")
     print(f"additional opts: {args.opts}")
     print(f"best val mae: {best_val_mae:.3f}")
 
-
+    plot_training_curves(
+        history["train_loss"],
+        history["val_loss"],
+        history["train_mae"],
+        history["val_mae"],
+        title=history["name"],
+        save_path=f"Images/training_curves_Dex.png",
+    )
+    if cfg.MC_DROPOUT or cfg.TTA > 0:
+        plot_uncertainty_by_age(
+            all_std,        # écarts-types récupérés lors du dernier run_epoch
+            val_dataset,    # dataset de validation pour avoir les âges
+            save_path="Images/uncertainty_by_age.png"
+        )
 if __name__ == '__main__':
     main()
+

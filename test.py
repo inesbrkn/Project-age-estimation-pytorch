@@ -1,6 +1,7 @@
 import argparse
 import better_exceptions
 from pathlib import Path
+from plot_log import plot_uncertainty
 import torch
 import torch.nn.parallel
 import torch.backends.cudnn as cudnn
@@ -9,11 +10,11 @@ import torch.utils.data
 from torch.utils.data import DataLoader
 import pretrainedmodels
 import pretrainedmodels.utils
-from model import get_model
+from model import get_model2
 from dataset import FaceDataset
 from defaults import _C as cfg
-from train import validate
-
+from train import mae_by_age_group
+from train import validate_one_epoch
 
 def get_args():
     model_names = sorted(name for name in pretrainedmodels.__dict__
@@ -40,7 +41,7 @@ def main():
 
     # create model
     print("=> creating model '{}'".format(cfg.MODEL.ARCH))
-    model = get_model(model_name=cfg.MODEL.ARCH, pretrained=None)
+    model = get_model2(model_name=cfg.MODEL.ARCH,method=cfg.MODEL.METHOD, pretrained=None)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = model.to(device)
 
@@ -63,9 +64,20 @@ def main():
                              num_workers=cfg.TRAIN.WORKERS, drop_last=False)
 
     print("=> start testing")
-    _, _, test_mae = validate(test_loader, model, None, 0, device)
-    print(f"test mae: {test_mae:.3f}")
+   
+    test_loss, test_acc, test_mae, preds,gt,std = validate_one_epoch(test_loader, model, None, 0, device, mode=cfg.MODEL.METHOD, return_preds=True)
+    if cfg.MC_DROPOUT or cfg.TTA > 0:
+        plot_uncertainty(preds, gt, std)
 
+    print(f"test loss: {test_loss:.3f}")
+    print(f"test mae: {test_mae:.3f}")
+    print(f"test acc: {test_acc:.3f}")
+
+     # MAE par tranche d'âge (enfants / adultes / seniors) pour analyse des erreurs
+    group_results = mae_by_age_group(preds, gt)
+    print("=> MAE by age group:")
+    for r in group_results:
+        print(f"  {r['name']} yrs: mae={r['mae']:.3f}, n={r['count']}, std(err)={r['std']:.3f}")
 
 if __name__ == '__main__':
     main()

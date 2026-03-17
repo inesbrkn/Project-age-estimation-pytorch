@@ -1,77 +1,102 @@
 import argparse
-# sert à lire des arguments depuis la ligne de commande
-import better_exceptions
 from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
 import cv2
 from torch.utils.data import Dataset
+import albumentations as A
+from albumentations.pytorch import ToTensorV2
 
-# Classe qui encapsule toute la logique d’augmentation d’images.
-# Pour chaque image on va appliquer une transformation au hasard pour que notre modèle n'apprenne pas par coeur les caractéristiques des images et qu'il puisse se généraliser.
+
+"""  Ce fichier contient le traitement des images mais une version plus récente avec albumentations plutôt que imgaug ."""
+
+
+
+# Normalisation ImageNet (RGB) pour les modèles pré-entraînés
+IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32).reshape(1, 1, 3)
+IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32).reshape(1, 1, 3)
+
+# =========================================================
+# Classe d'augmentation équivalente à imgaug
+# =========================================================
 class ImgAugTransform:
     def __init__(self):
-        from imgaug import augmenters as iaa
-        self.aug = iaa.Sequential([
-            iaa.OneOf([
-                iaa.Sometimes(0.25, iaa.AdditiveGaussianNoise(scale=0.1 * 255)),
-                iaa.Sometimes(0.25, iaa.GaussianBlur(sigma=(0, 3.0)))
-                ]),
-            iaa.Affine(
-                rotate=(-20, 20), mode="edge",
-                scale={"x": (0.95, 1.05), "y": (0.95, 1.05)},
-                translate_percent={"x": (-0.05, 0.05), "y": (-0.05, 0.05)}
+        self.aug = A.Compose([
+            # équivalent OneOf([AdditiveGaussianNoise, GaussianBlur])
+            A.OneOf([
+                A.GaussNoise(std_range=(0.04, 0.2), mean_range=(0, 0), per_channel=True, p=0.25), # ~0.1*255 ± random
+                A.GaussianBlur(blur_limit=(0, 3))
+            ], p=0.5),
+            
+            # affine similaire à iaa.Affine
+            A.Affine(
+                rotate=(-20, 20),
+                scale=(0.95, 1.05),
+                translate_percent=(-0.05, 0.05),
+                border_mode=cv2.BORDER_REPLICATE
             ),
-            iaa.AddToHueAndSaturation(value=(-10, 10), per_channel=True),
-            iaa.GammaContrast((0.3, 2)),
-            iaa.Fliplr(0.5),
+            
+            # Hue & Saturation comme iaa.AddToHueAndSaturation
+            A.HueSaturationValue(
+                hue_shift_limit=10,
+                sat_shift_limit=10,
+                val_shift_limit=0
+            ),
+            
+            # Gamma contrast équivalent
+            A.RandomGamma(gamma_limit=(30, 200)),
+            
+            # Flip horizontal
+            A.HorizontalFlip(p=0.5)
         ])
 
     def __call__(self, img):
-        img = np.array(img)
-        img = self.aug.augment_image(img)
-        return img
+        return self.aug(image=img)["image"]
 
-# Dataset PyTorch pour un problème de prédiction d’âge à partir d’un visage.
-# recup un dataset et le traite 
+
+# =========================================================
+# Dataset PyTorch
+# =========================================================
 class FaceDataset(Dataset):
     def __init__(self, data_dir, data_type, img_size=224, augment=False, age_stddev=1.0):
-        assert(data_type in ("train", "valid", "test"))
-        csv_path = Path(data_dir).joinpath(f"gt_avg_{data_type}.csv")
-        img_dir = Path(data_dir).joinpath(data_type)
+        assert data_type in ("train", "valid", "test")
+        csv_path = Path(data_dir) / f"gt_avg_{data_type}.csv"
+        img_dir = Path(data_dir) / data_type
+
         self.img_size = img_size
         self.augment = augment
         self.age_stddev = age_stddev
 
-        # On commence par augmenter l'image si augment = true et sinon on applique juste la fonction identité,  
         if augment:
             self.transform = ImgAugTransform()
         else:
-            self.transform = lambda i: i
+            # Si pas d'augmentation, juste identité
+            self.transform = lambda img: img
 
         self.x = []
         self.y = []
         self.std = []
-        # open file 
-        df = pd.read_csv(str(csv_path))
-        ignore_path = Path(__file__).resolve().parent.joinpath("ignore_list.csv")
-        ignore_img_names = list(pd.read_csv(str(ignore_path))["img_name"].values)
+
+        df = pd.read_csv(csv_path)
+
+        ignore_path = Path(__file__).resolve().parent / "ignore_list.csv"
+        ignore_img_names = []
+        if ignore_path.exists():
+            ignore_img_names = list(pd.read_csv(ignore_path)["img_name"].values)
 
         for _, row in df.iterrows():
             img_name = row["file_name"]
 
-            # s'il est dans le fichier qu'on veut ignorer on passe à l'image suivante
             if img_name in ignore_img_names:
                 continue
 
-            img_path = img_dir.joinpath(img_name + "_face.jpg")
-            assert(img_path.is_file())
+            img_path = img_dir / f"{img_name}_face.jpg"
+            if not img_path.is_file():
+                continue
 
-            # X c'est le dataset y la valeur de la prédiction
             self.x.append(str(img_path))
             self.y.append(row["apparent_age_avg"])
-            # std écart type à quel point on est loin de la vraie valeure
             self.std.append(row["apparent_age_std"])
 
     def __len__(self):
@@ -81,25 +106,35 @@ class FaceDataset(Dataset):
         img_path = self.x[idx]
         age = self.y[idx]
 
+        # ajout de bruit sur l'âge si augmentation
         if self.augment:
             age += np.random.randn() * self.std[idx] * self.age_stddev
 
-        img = cv2.imread(str(img_path), 1)
+        img = cv2.imread(img_path, 1)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         img = cv2.resize(img, (self.img_size, self.img_size))
         img = self.transform(img).astype(np.float32)
-        return torch.from_numpy(np.transpose(img, (2, 0, 1))), np.clip(round(age), 0, 100)
+
+        # Normalisation ImageNet (pixels 0–255 → 0–1 puis mean/std)
+        img = (img / 255.0 - IMAGENET_MEAN) / IMAGENET_STD
+
+        # conversion HWC → CHW pour PyTorch
+        img = np.transpose(img, (2, 0, 1))
+
+        return torch.from_numpy(img), np.clip(round(age), 0, 100)
 
 
+# =========================================================
+# Test rapide
+# =========================================================
 def main():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("--data_dir", type=str, required=True)
     args = parser.parse_args()
-    dataset = FaceDataset(args.data_dir, "train")
-    print("train dataset len: {}".format(len(dataset)))
-    dataset = FaceDataset(args.data_dir, "valid")
-    print("valid dataset len: {}".format(len(dataset)))
-    dataset = FaceDataset(args.data_dir, "test")
-    print("test dataset len: {}".format(len(dataset)))
+
+    for dt in ["train", "valid", "test"]:
+        dataset = FaceDataset(args.data_dir, dt)
+        print(f"{dt} dataset len: {len(dataset)}")
 
 
 if __name__ == '__main__':
