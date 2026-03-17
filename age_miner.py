@@ -8,14 +8,9 @@ import pandas as pd
 # =========================================================
 
 # Chemin vers la racine de ton projet (où se trouve pseudo_labeler.py)
-ROOT_PROJECT = "/content/Project-age-estimation-pytorch"
-
-# Chemin vers le dossier ultra-imbriqué (où se trouve stylegan3)
-NESTED_DIR = "/content/Project-age-estimation-pytorch/Project-age-estimation-pytorch/Project-age-estimation-pytorch"
-
 # Fichiers scripts
-STYLEGAN_PATH = os.path.join(NESTED_DIR, "stylegan3/gen_images.py")
-PSEUDO_LBL_PATH = os.path.join(ROOT_PROJECT, "pseudo_labeler.py")
+STYLEGAN_PATH = "/content/Project-age-estimation-pytorch/stylegan3/gen_images.py"
+PSEUDO_LBL_PATH = "/content/Project-age-estimation-pytorch/pseudo_labeler.py"
 
 # Fichiers de poids (Checkpoints)
 PKL_PATH = "/content/stylegan3-r-ffhqu-1024x1024.pkl"
