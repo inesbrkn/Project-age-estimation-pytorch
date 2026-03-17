@@ -2,6 +2,7 @@ import argparse
 from pathlib import Path
 
 import numpy as np
+from plot_log import plot_training_curves
 import torch
 import torch.nn as nn
 import torch.backends.cudnn as cudnn
@@ -16,8 +17,8 @@ from dataset import FaceDataset
 from defaults import _C as cfg
 from train import (
     set_seed,
-    _load_state_dict_into_model,
     AverageMeter,
+    _load_state_dict_into_model
 )
 
 
@@ -97,7 +98,8 @@ def train_cls(train_loader, model, criterion, optimizer, epoch, device, method):
     model.train()
     loss_monitor = AverageMeter()
     accuracy_monitor = AverageMeter()
-
+    preds = []
+    gt = []
     for x, y in train_loader:
         x = x.to(device)
         y = y.to(device)
@@ -122,11 +124,19 @@ def train_cls(train_loader, model, criterion, optimizer, epoch, device, method):
         loss_monitor.update(cur_loss, sample_num)
         accuracy_monitor.update(correct_num, sample_num)
 
+        preds.append(age_est.detach().cpu().numpy())
+        gt.append(y.detach().cpu().numpy())
+        
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        
 
-    return loss_monitor.avg, accuracy_monitor.avg
+    preds = np.concatenate(preds)
+    gt = np.concatenate(gt)
+    mae = np.abs(preds - gt).mean()
+
+    return loss_monitor.avg, accuracy_monitor.avg, mae
 
 
 def validate_cls(validate_loader, model, criterion, epoch, device, method):
@@ -194,7 +204,7 @@ def main():
     # Mode classification explicite : DEX ou Ordinal selon MODEL.METHOD
     method = cfg.MODEL.METHOD
     if method not in ("dex", "ordinal"):
-        method = "dex"
+        method = "ordinal"
     cfg.MODEL.METHOD = method
     cfg.MODEL.TASK = "classification"
     cfg.freeze()
@@ -224,37 +234,25 @@ def main():
 
     # ----- Reprise depuis un checkpoint (--resume) -----
     resume_path = args.resume
-    checkpoint = None
-
+    
     if resume_path:
         if Path(resume_path).is_file():
-            print("=> loading classification checkpoint '{}'".format(resume_path))
+            print("=> loading checkpoint '{}'".format(resume_path))
             checkpoint = torch.load(resume_path, map_location="cpu")
-            start_epoch = checkpoint["epoch"]
+            start_epoch = checkpoint['epoch']
             _load_state_dict_into_model(model, checkpoint["state_dict"])
-            print(
-                "=> loaded checkpoint '{}' (epoch {})".format(
-                    resume_path, checkpoint["epoch"]
-                )
-            )
-            if "optimizer_state_dict" in checkpoint:
-                optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-            if "best_val_mae" in checkpoint:
-                best_val_mae = checkpoint["best_val_mae"]
-            else:
-                best_val_mae = 10000.0
+            model.load_state_dict(checkpoint['state_dict'])
+            print("=> loaded checkpoint '{}' (epoch {})"
+                  .format(resume_path, checkpoint['epoch']))
+            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         else:
             print("=> no checkpoint found at '{}'".format(resume_path))
-            best_val_mae = 10000.0
-    else:
-        best_val_mae = 10000.0
 
     if args.multi_gpu:
         model = nn.DataParallel(model)
 
     if device == "cuda":
         cudnn.benchmark = True
-
     if cfg.MODEL.METHOD == "ordinal":
         criterion = OrdinalLoss().to(device)
     else:
@@ -299,10 +297,7 @@ def main():
         gamma=cfg.TRAIN.LR_DECAY_RATE,
         last_epoch=start_epoch - 1,
     )
-    if checkpoint is not None and "scheduler_state_dict" in checkpoint:
-        scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
-        print("=> loaded scheduler state from classification checkpoint")
-
+    best_val_mae = 10000.0
     train_writer = None
 
     if args.tensorboard is not None:
@@ -316,7 +311,7 @@ def main():
 
     for epoch in range(start_epoch, cfg.TRAIN.EPOCHS):
         # train
-        train_loss, train_acc = train_cls(
+        train_loss, train_acc , train_mae= train_cls(
             train_loader, model, criterion, optimizer, epoch, device, cfg.MODEL.METHOD
         )
 
@@ -324,57 +319,71 @@ def main():
         val_loss, val_acc, val_mae, _, _ = validate_cls(
             val_loader, model, criterion, epoch, device, cfg.MODEL.METHOD
         )
+        history = {
+            "name": f"{cfg.MODEL.ARCH}-{cfg.MODEL.METHOD}",
+            "train_loss": [],
+            "val_loss": [],
+            "train_mae": [],
+            "val_mae": [],
+            "train_acc": [],
+            "val_acc": [],
+        }
 
+   
         if args.tensorboard is not None:
             train_writer.add_scalar("loss", train_loss, epoch)
+            train_writer.add_scalar("mae", train_mae, epoch)
             train_writer.add_scalar("acc", train_acc, epoch)
             val_writer.add_scalar("loss", val_loss, epoch)
             val_writer.add_scalar("acc", val_acc, epoch)
             val_writer.add_scalar("mae", val_mae, epoch)
 
-        scheduler.step()
+        # ===== save history =====
+        history["train_loss"].append(train_loss)
+        history["val_loss"].append(val_loss)
+        history["train_mae"].append(train_mae)
+        history["val_mae"].append(val_mae)
+        history["train_acc"].append(train_acc)
+        history["val_acc"].append(val_acc)
 
-        # Checkpoint best (classification)
+        
+
         if val_mae < best_val_mae:
-            print(
-                f"=> [epoch {epoch:03d}] best val mae (cls) improved from {best_val_mae:.3f} to {val_mae:.3f}"
-            )
-            best_val_mae = val_mae
-            model_state_dict = (
-                model.module.state_dict() if isinstance(model, nn.DataParallel) else model.state_dict()
-            )
+            
+            print(f"=> [epoch {epoch:03d}] best val mae was improved from {best_val_mae:.3f} to {val_mae:.3f}")
+            model_state_dict = model.module.state_dict() if args.multi_gpu else model.state_dict()
             torch.save(
                 {
-                    "epoch": epoch + 1,
-                    "arch": cfg.MODEL.ARCH,
-                    "state_dict": model_state_dict,
-                    "optimizer_state_dict": optimizer.state_dict(),
-                    "scheduler_state_dict": scheduler.state_dict(),
-                    "best_val_mae": best_val_mae,
+                    'epoch': epoch + 1,
+                    'arch': cfg.MODEL.ARCH,
+                    'state_dict': model_state_dict,
+                    'optimizer_state_dict': optimizer.state_dict()
                 },
-                str(checkpoint_dir / "best_cls.pth"),
+                str(checkpoint_dir.joinpath("epoch{:03d}_{:.5f}_{:.4f}.pth".format(epoch, val_loss, val_mae)))
             )
+            best_val_mae = val_mae
+        else:
+            print(f"=> [epoch {epoch:03d}] best val mae was not improved from {best_val_mae:.3f} ({val_mae:.3f})")
 
-        # Checkpoint last (classification)
-        model_state_dict = (
-            model.module.state_dict() if isinstance(model, nn.DataParallel) else model.state_dict()
-        )
-        torch.save(
-            {
-                "epoch": epoch + 1,
-                "arch": cfg.MODEL.ARCH,
-                "state_dict": model_state_dict,
-                "optimizer_state_dict": optimizer.state_dict(),
-                "scheduler_state_dict": scheduler.state_dict(),
-                "best_val_mae": best_val_mae,
-            },
-            str(checkpoint_dir / "last_cls.pth"),
-        )
 
-    print("=> classification training finished")
+
+         # adjust learning rate
+        scheduler.step()
+
+        
+    print("=> training finished")
     print(f"additional opts: {args.opts}")
-    print(f"best val mae (cls): {best_val_mae:.3f}")
+    print(f"best val mae: {best_val_mae:.3f}")
 
+    plot_training_curves(
+        history["train_loss"],
+        history["val_loss"],
+        history["train_mae"],
+        history["val_mae"],
+        title=history["name"],
+        save_path=f"Images/training_curves_Dex.png",
+    )
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
+

@@ -273,7 +273,9 @@ def main():
 
     logdir = Path(args.logdir)
     
+   
     if args.compare:
+        """ 
         dex_train = logdir / "dMODEL.METHOD_dex_train"
         dex_val   = logdir / "dMODEL.METHOD_dex_val"
         dex_train3e4 = logdir / "MODEL.METHOD_dex_TRAIN.LR_3e4_MODEL.ARCH_efficientnet_b3_train"
@@ -287,7 +289,7 @@ def main():
             names=["Dex LR 3e-4", "Dex LR 1e-4", "dex baseline"],
             title=args.title
         )
-        """ 
+        
         dex_train = logdir / "dMODEL.METHOD_dex_train"
         dex_val   = logdir / "dMODEL.METHOD_dex_val"
         dex_train01 = logdir / "dMODEL.METHOD_dex_MODEL.LABEL_SMOOTHING_0.1_train"
@@ -301,34 +303,41 @@ def main():
             names=["DEX", "Dex_LabelSmoothing_0.1", "Dex_LabelSmoothing_0.05"],
             title=args.title
         )
-   
+        """
         # Dossiers TensorBoard pour DEX, Laplace, Gaussian
-        dex_train = logdir / "dMODEL.METHOD_dex_train"
-        dex_val   = logdir / "dMODEL.METHOD_dex_val"
+        ordinal_train = logdir / "MODEL.METHOD_ordinal_cls_train"
+        ordinal_val = logdir / "MODEL.METHOD_ordinal_cls_val"
+
+        plot_two_methods(   
+            train_logs=[ordinal_train],
+            val_logs=[ordinal_val],
+            names=["Ordinal"],
+            title=args.title
+        )
+
+        dex_train = logdir / "n_MODEL.METHOD_dex_train"
+        dex_val   = logdir / "n_MODEL.METHOD_dex_val"
 
         lap_train = logdir / "dMODEL.METHOD_laplace_train"
         lap_val   = logdir / "dMODEL.METHOD_laplace_val"
 
         gaus_train = logdir / "n_MODEL.METHOD_gaussian_train"
         gaus_val   = logdir / "n_MODEL.METHOD_gaussian_val"
-        
-        none_train = logdir / "essayeMODEL.METHOD_none_train"
-        none_val   = logdir / "essayeMODEL.METHOD_none_val"
 
-        #residual_train = logdir / "essayeMODEL.METHOD_residual_train"
-        #residual_val   = logdir / "essayeMODEL.METHOD_residual_val"
-
+        residual_train = logdir / "essayeMODEL.METHOD_residual_train"
+        residual_val   = logdir / "essayeMODEL.METHOD_residual_val"
+        """
         plot_two_methods(   
-            train_logs=[dex_train, lap_train, gaus_train,none_train],
-            val_logs=[dex_val, lap_val, gaus_val,none_val],
-            names=["DEX", "Laplace", "Gaussian","none"],
+            train_logs=[lap_train, dex_train, gaus_train,residual_train, ordinal_train],
+            val_logs=[ lap_val,dex_val, gaus_val,residual_val,ordinal_val],
+            names=["Laplace", "Dex", "Gaussian","Residual", "Ordinal"],
             title=args.title
         )
-       
+        
         plot_two_methods(train_logs=[dex_train, lap_train],val_logs=[dex_val, lap_val, none_val],names=["DEX", "Laplace"],
             title=args.title
         )
-        """
+        
         
         resnet_train = logdir / "MODEL.METHOD_laplace_train"
         resnet_val   = logdir / "MODEL.METHOD_laplace_val"
@@ -352,6 +361,7 @@ def main():
             names=["se_resnext50_32x4d","ResNet50", "ResNet101", "Efficient_b0", "Efficient_b3"],
             title="Comparaison des backbones sur le model utilisant LaplaceLoss"
         ) 
+        """
          
     else:
         train_log = logdir / "_train"
