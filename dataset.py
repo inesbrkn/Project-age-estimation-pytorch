@@ -95,11 +95,25 @@ class FaceDataset(Dataset):
             if synth_csv.exists():
                 df_synth = pd.read_csv(synth_csv)
                 for _, row in df_synth.iterrows():
-                    img_path = Path(synth_dir) / f"{row['file_name']}.jpg"
-                    if img_path.is_file():
-                        self.x.append(str(img_path))
-                        self.y.append(row["apparent_age_avg"])
-                        self.std.append(row["apparent_age_std"])
+                    # On retire l'extension du nom s'il y en a déjà une dans le CSV
+                    base_name = str(row['file_name']).replace('.jpg', '').replace('.png', '')
+                    
+                    # On prépare les deux chemins possibles
+                    img_path_jpg = Path(synth_dir) / f"{base_name}.jpg"
+                    img_path_png = Path(synth_dir) / f"{base_name}.png"
+                    
+                    # On vérifie lequel existe réellement sur le disque
+                    if img_path_jpg.is_file():
+                        img_path = img_path_jpg
+                    elif img_path_png.is_file():
+                        img_path = img_path_png
+                    else:
+                        continue # Image introuvable, on passe à la suivante
+                        
+                    self.x.append(str(img_path))
+                    self.y.append(row["apparent_age_avg"])
+                    self.std.append(row["apparent_age_std"])
+
 
     def __len__(self):
         return len(self.y)

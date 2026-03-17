@@ -45,7 +45,8 @@ def main():
 
     # 2. Prédire l'âge pour chaque image
     print("=> Début du pseudo-labeling...")
-    image_files = list(gan_dir.glob("*.jpg"))
+    image_files = list(gan_dir.rglob("*.jpg"))
+
     
     with torch.no_grad():
         for img_path in image_files:
