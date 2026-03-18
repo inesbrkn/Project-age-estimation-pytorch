@@ -59,7 +59,7 @@ def plot_age_distribution(counts, title="Distribution des âges", save_path=None
     plt.show()
 
 if __name__ == "__main__":
-    folder = "appa-real-release"  # chemin vers ton dossier CSV
+    folder = "/content/app-real-relase/appa-real-release/gt_avg_train.csv"  # chemin vers ton dossier CSV
     files = ["gt_avg_train.csv", "gt_avg_valid.csv", "gt_avg_test.csv"]
 
     for f in files:

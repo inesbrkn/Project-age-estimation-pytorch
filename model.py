@@ -251,24 +251,22 @@ def get_model2(
     p_dropout=0.5,
 ):
     """
-    Retourne un modèle adapté à la méthode choisie :
-      - dex
-      - residual
-      - gaussian
-      - laplace
+    Retourne un modèle adapté à la méthode choisie.
     """
 
-    # timm propre
-    if method in ["dex", "weightLoss", "none"]:
-
+    # On ajoute "ordinal" dans la liste des modèles que timm doit construire lui-même
+    if method in ["dex", "weightLoss", "none", "ordinal"]:
+        
+        # Si c'ordinal, on a besoin de K-1 sorties (soit 100)
+        actual_classes = num_classes - 1 if method == "ordinal" else num_classes
+        
         base_model = timm.create_model(
             model_name,
             pretrained=pretrained,
-            num_classes=num_classes
+            num_classes=actual_classes
         )
-
     else:
-
+        # Pour residual, gaussian, laplace, on veut les features brutes
         base_model = timm.create_model(
             model_name,
             pretrained=pretrained,
@@ -278,10 +276,10 @@ def get_model2(
     dim_feats = base_model.num_features
 
     # =========================
-    # DEX
+    # DEX / NONE / WEIGHTLOSS / ORDINAL
     # =========================
-    if method == "dex":
-        base_model.classifier = nn.Linear(dim_feats, num_classes)
+    # timm a déjà tout configuré correctement, on a juste à retourner le modèle !
+    if method in ["dex", "weightLoss", "none", "ordinal"]:
         return base_model
 
     # =========================
@@ -306,19 +304,9 @@ def get_model2(
             p_dropout=p_dropout,
         )
 
-    elif method == "ordinal":
-        # Ordinal regression : pour K classes (0..K-1), on prédit K-1 sorties binaires \"age > k ?\"
-        num_thresholds = num_classes - 1
-        base_model.last_linear = nn.Linear(dim_feats, num_thresholds)
-        return base_model
-    # =========================
     # fallback
-    # =========================
     else:
-        base_model.classifier = nn.Linear(dim_feats, num_classes)
         return base_model
-
-
 # =====================================================
 # Test
 # =====================================================

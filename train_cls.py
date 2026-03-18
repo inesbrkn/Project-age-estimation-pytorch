@@ -16,11 +16,13 @@ from model import get_model2
 from dataset import FaceDataset
 from defaults import _C as cfg
 from train import (
-    set_seed,
-    AverageMeter,
-    _load_state_dict_into_model
+    AverageMeter
 )
 
+from utils import (
+    set_seed,
+    _load_state_dict_into_model
+)
 
 class OrdinalLoss(nn.Module):
     """

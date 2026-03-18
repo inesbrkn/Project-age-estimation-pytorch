@@ -133,7 +133,7 @@ def get_criterion(mode, alpha=0.5, device="cpu"):
     elif mode == "laplace":
         return LaplaceLikelihoodLoss().to(device) 
     elif mode == "weightLoss":
-        df = pd.read_csv("appa-real-release/gt_avg_train.csv")
+        df = pd.read_csv("/content/app-real-relase/appa-real-release/gt_avg_train.csv")
         counts = df["apparent_age_avg"].round().value_counts().sort_index()
         counts = counts.reindex(range(101), fill_value=1) + 1  # éviter poids infini
 
@@ -147,7 +147,7 @@ def get_criterion(mode, alpha=0.5, device="cpu"):
 
     elif mode == "balancedSoftmax":
 
-        df = pd.read_csv("appa-real-release/gt_avg_train.csv")
+        df = pd.read_csv("/content/app-real-relase/appa-real-release/gt_avg_train.csv")
 
         counts = df["apparent_age_avg"].round().value_counts().sort_index()
 
