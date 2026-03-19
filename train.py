@@ -315,15 +315,6 @@ def main():
         train_writer = SummaryWriter(log_dir=args.tensorboard + "/" + opts_prefix + "_train")
         val_writer = SummaryWriter(log_dir=args.tensorboard + "/" + opts_prefix + "_val")
     
-    history = {
-        "name": f"{cfg.MODEL.ARCH}-{cfg.MODEL.METHOD}",
-        "train_loss": [],
-        "val_loss": [],
-        "train_mae": [],
-        "val_mae": [],
-        "train_acc": [],
-        "val_acc": [],
-    }
 
     all_std=[]
     for epoch in range(start_epoch, cfg.TRAIN.EPOCHS):
@@ -338,14 +329,6 @@ def main():
             val_writer.add_scalar("loss", val_loss, epoch)
             val_writer.add_scalar("acc", val_acc, epoch)
             val_writer.add_scalar("mae", val_mae, epoch)
-
-        # ===== save history =====
-        history["train_loss"].append(train_loss)
-        history["val_loss"].append(val_loss)
-        history["train_mae"].append(train_mae)
-        history["val_mae"].append(val_mae)
-        history["train_acc"].append(train_acc)
-        history["val_acc"].append(val_acc)
 
         if cfg.MC_DROPOUT or cfg.TTA >0 :
                 all_std.append(std)
@@ -377,14 +360,7 @@ def main():
     print(f"additional opts: {args.opts}")
     print(f"best val mae: {best_val_mae:.3f}")
 
-    plot_training_curves(
-        history["train_loss"],
-        history["val_loss"],
-        history["train_mae"],
-        history["val_mae"],
-        title=history["name"],
-        save_path=f"Images/training_curves_Dex.png",
-    )
+   
     if cfg.MC_DROPOUT or cfg.TTA > 0:
         plot_uncertainty_by_age(
             all_std,        # écarts-types récupérés lors du dernier run_epoch

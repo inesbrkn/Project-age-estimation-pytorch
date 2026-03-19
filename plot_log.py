@@ -275,43 +275,16 @@ def main():
     
    
     if args.compare:
-        """ 
-        dex_train = logdir / "dMODEL.METHOD_dex_train"
-        dex_val   = logdir / "dMODEL.METHOD_dex_val"
-        dex_train3e4 = logdir / "MODEL.METHOD_dex_TRAIN.LR_3e4_MODEL.ARCH_efficientnet_b3_train"
-        dex_val3e4  = logdir / "MODEL.METHOD_dex_TRAIN.LR_3e4_MODEL.ARCH_efficientnet_b3_val"
-        dex_train1e4 = logdir / "MODEL.METHOD_dex_TRAIN.LR_1e4_MODEL.ARCH_efficientnet_b3_train"
-        dex_val1e4   = logdir / "MODEL.METHOD_dex_TRAIN.LR_1e4_MODEL.ARCH_efficientnet_b3_val"
-        
-        plot_two_methods(   
-            train_logs=[dex_train3e4, dex_train1e4, dex_train],
-            val_logs=[dex_val3e4, dex_val1e4, dex_val],
-            names=["Dex LR 3e-4", "Dex LR 1e-4", "dex baseline"],
-            title=args.title
-        )
-        
-        dex_train = logdir / "dMODEL.METHOD_dex_train"
-        dex_val   = logdir / "dMODEL.METHOD_dex_val"
-        dex_train01 = logdir / "dMODEL.METHOD_dex_MODEL.LABEL_SMOOTHING_0.1_train"
-        dex_val01   = logdir / "dMODEL.METHOD_dex_MODEL.LABEL_SMOOTHING_0.1_val"
-        dex_train005 = logdir / "dMODEL.METHOD_dex_MODEL.LABEL_SMOOTHING_0.05_train"
-        dex_val005   = logdir / "dMODEL.METHOD_dex_MODEL.LABEL_SMOOTHING_0.05_val"
-        
-        plot_two_methods(   
-            train_logs=[dex_train, dex_train01, dex_train005],
-            val_logs=[dex_val,dex_val01, dex_val005],
-            names=["DEX", "Dex_LabelSmoothing_0.1", "Dex_LabelSmoothing_0.05"],
-            title=args.title
-        )
-        """
+       
+      
         # Dossiers TensorBoard pour DEX, Laplace, Gaussian
-        ordinal_train = logdir / "MODEL.METHOD_ordinal_cls_train"
-        ordinal_val = logdir / "MODEL.METHOD_ordinal_cls_val"
+        ordinal_train = logdir / "_cls_train"
+        ordinal_val = logdir / "_cls_val"
 
         plot_two_methods(   
             train_logs=[ordinal_train],
             val_logs=[ordinal_val],
-            names=["Ordinal"],
+            names=["Ordinal données synthétiques"],
             title=args.title
         )
 
@@ -326,7 +299,7 @@ def main():
 
         residual_train = logdir / "essayeMODEL.METHOD_residual_train"
         residual_val   = logdir / "essayeMODEL.METHOD_residual_val"
-        """
+        
         plot_two_methods(   
             train_logs=[lap_train, dex_train, gaus_train,residual_train, ordinal_train],
             val_logs=[ lap_val,dex_val, gaus_val,residual_val,ordinal_val],
@@ -334,7 +307,7 @@ def main():
             title=args.title
         )
         
-        plot_two_methods(train_logs=[dex_train, lap_train],val_logs=[dex_val, lap_val, none_val],names=["DEX", "Laplace"],
+        plot_two_methods(train_logs=[dex_train, lap_train],val_logs=[dex_val, lap_val],names=["DEX", "Laplace"],
             title=args.title
         )
         
@@ -361,7 +334,6 @@ def main():
             names=["se_resnext50_32x4d","ResNet50", "ResNet101", "Efficient_b0", "Efficient_b3"],
             title="Comparaison des backbones sur le model utilisant LaplaceLoss"
         ) 
-        """
          
     else:
         train_log = logdir / "_train"

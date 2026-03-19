@@ -15,7 +15,7 @@ def compute_predictions(outputs, mode, device):
             # age estimé = somme des probabilités sigmoid(logits)
             probs = torch.sigmoid(logits)
             age_est = probs.sum(dim=1)
-            #predicted = age_est.round().clamp(0, 100).long()
+            
             return age_est
     elif mode == "residual":
         logits, residual = outputs
@@ -57,14 +57,14 @@ def tta_predict2(model, x, mode, device, n_aug=5):
 
             preds.append(pred)
 
-    preds = torch.stack(preds)   # shape : [n_aug, batch]
+    preds = torch.stack(preds) 
 
     mean_pred = preds.mean(0)
     std_pred = preds.std(0)
 
     return mean_pred, std_pred
-"""
-def tta_predict(model, x, mode, device):
+
+def tta_predict3(model, x, mode, device):
 
     tta_transforms = [
         lambda img: img,  # original
@@ -96,7 +96,6 @@ def tta_predict(model, x, mode, device):
     std_pred = preds.std(0)
 
     return mean_pred, std_pred
-"""
 
 def tta_predict(model, x, mode, device):
     """

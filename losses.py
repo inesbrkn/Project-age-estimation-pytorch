@@ -4,30 +4,7 @@ import torch.nn as nn
 from age_distribution import count_examples_by_age
 from defaults import _C as cfg
 import torch.nn.functional as F
-"""
-class ResidualLoss(nn.Module):
-    def __init__(self, alpha=0.2, label_smoothing=0.0):
-        super().__init__()
-        self.cls_loss = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
-        self.res_loss = nn.MSELoss()
-        self.alpha = alpha
 
-    def forward(self, outputs, target):
-
-        cls_logits, residual = outputs
-
-        # classification loss
-        loss_cls = self.cls_loss(cls_logits, target)
-
-        # predicted class
-        pred_class = cls_logits.argmax(dim=1).detach()A
-
-        residual_target = target.float() - pred_class.float()
-
-        loss_res = self.res_loss(residual, residual_target)
-
-        return loss_cls + self.alpha * loss_res
-"""
 
 class OrdinalLoss(nn.Module):
     """
@@ -105,18 +82,15 @@ class WeightedCrossEntropy(nn.Module):
         return loss
 
 class BalancedSoftmaxLoss(nn.Module):
-
     def __init__(self, class_counts, device="cpu"):
         super().__init__()
-
         counts = torch.tensor(class_counts, dtype=torch.float32)
-        self.log_prior = torch.log(counts)
-        self.log_prior = self.log_prior.to(device)
+        
+        probs = counts / counts.sum()   # normalisation
+        self.log_prior = torch.log(probs).to(device)
 
     def forward(self, logits, target):
-
-        logits = logits + self.log_prior
-
+        logits = logits - self.log_prior  
         return F.cross_entropy(logits, target)
 
 # à appeler pour recup le mode choisi
