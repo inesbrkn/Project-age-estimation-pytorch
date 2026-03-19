@@ -213,7 +213,7 @@ def build_sampler(dataset):
     counts = torch.bincount(ages, minlength=101)  # suppose que l’âge max est 100
 
     # poids inversement proportionnels à la fréquence
-    weights = 1.0 / counts
+    weights = 1.0 / (counts + 1e-6)
     sample_weights = weights[ages]
 
     sampler = WeightedRandomSampler(
@@ -279,8 +279,7 @@ def main():
     criterion = get_criterion(cfg.MODEL.METHOD, alpha=0.5, device=device)
 
     train_dataset = FaceDataset(args.data_dir, "train", img_size=cfg.MODEL.IMG_SIZE, augment=True,
-                                age_stddev=cfg.TRAIN.AGE_STDDEV, synth_dir=args.synth_dir,       # <--- NOUVEAU
-        synth_only=args.synth_only)
+                                age_stddev=cfg.TRAIN.AGE_STDDEV)
     
     if cfg.MODEL.balanced_sampler :
 

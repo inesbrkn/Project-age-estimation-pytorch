@@ -6,7 +6,7 @@ import torch.nn.functional as F
 
 def compute_predictions(outputs, mode, device):
     
-    if mode == "dex" or mode== "weightLoss":
+    if mode == "dex" or mode == "weightLoss" or mode ==  "balancedSoftmax":
         ages = torch.arange(0, 101, device=device).float()
         probs = F.softmax(outputs, dim=-1)
         return (probs * ages).sum(dim=1)
@@ -258,7 +258,7 @@ def get_model2(
     """
 
     # timm propre
-    if method in ["dex", "weightLoss", "none"]:
+    if method in ["dex", "weightLoss", "none", "balancedSoftmax"]:
 
         base_model = timm.create_model(
             model_name,
