@@ -238,7 +238,6 @@ def mc_dropout_predict(model, x, mode, device, n_samples=50):
     return mean_pred, std_pred
 
 
-
 # =====================================================
 # Model factory
 # =====================================================
